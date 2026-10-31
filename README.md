@@ -127,6 +127,10 @@ El código detecta solo dónde está corriendo: en tu computadora usa la carpeta
 Vercel publica la rama `main`. Si trabajas desde la rama de Claude, únela a `main`:
 
 ```bash
+git fetch origin
+```
+
+```bash
 git checkout main
 ```
 
@@ -135,7 +139,7 @@ git pull origin main
 ```
 
 ```bash
-git merge claude/ecstatic-ramanujan-ry9kwh
+git merge origin/claude/ecstatic-ramanujan-ry9kwh
 ```
 
 ```bash
