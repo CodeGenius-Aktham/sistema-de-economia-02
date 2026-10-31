@@ -29,34 +29,54 @@ Funciona en **teléfono y computadora** (diseño adaptable, menú inferior en el
 
 ---
 
-## Cómo ponerlo a funcionar
+## 1. Ejecutarlo en tu computadora
 
-Necesitas **Node.js 22.13 o superior** ([descargar](https://nodejs.org)). No hace falta instalar ninguna base de datos: usa SQLite, que viene incluido en Node.
+Necesitas **Node.js 20.12 o superior** (recomendado la versión LTS de [nodejs.org](https://nodejs.org)) y **Git** ([git-scm.com](https://git-scm.com)). No hace falta instalar ninguna base de datos: en tu computadora se guarda todo en la carpeta `data/`.
+
+Descarga el proyecto (solo la primera vez):
+
+```bash
+git clone https://github.com/CodeGenius-Aktham/sistema-de-economia-02.git
+```
+
+```bash
+cd sistema-de-economia-02
+```
+
+Instala las dependencias:
 
 ```bash
 npm install
 ```
 
-```bash
-npm start
-```
-
-Abre <http://localhost:3000>.
-
-La primera vez se crea el administrador:
-
-- **Usuario:** `admin`
-- **Contraseña:** `admin123`
-
-El panel te pedirá cambiarla en **Ajustes**. También puedes definirla antes de arrancar con las variables `ADMIN_USER` y `ADMIN_PASSWORD` (ver `.env.example`).
-
-### ¿Quieres verlo con datos de ejemplo?
+(Opcional) Carga datos de ejemplo para ver el portal lleno:
 
 ```bash
 npm run demo
 ```
 
-Carga 3 semestres con materias de Economía, clases, materiales, evaluaciones y estudiantes de prueba. Para entrar como estudiante usa la cédula **12345678** y el correo **estudiante@demo.com**. (Si ya tienes materias cargadas no hace nada; con `npm run demo -- --force` reemplaza todo el contenido por el de ejemplo).
+Arranca el portal:
+
+```bash
+npm start
+```
+
+Abre <http://localhost:3000>. Para detenerlo presiona `Ctrl + C` en la terminal.
+
+- **Administrador:** usuario `admin`, contraseña `admin123` (el panel te pedirá cambiarla en **Ajustes**).
+- **Estudiante de prueba** (si cargaste el demo): cédula **12345678**, correo **estudiante@demo.com**.
+
+Para traer la última versión más adelante:
+
+```bash
+git pull
+```
+
+```bash
+npm install
+```
+
+`npm run demo` no hace nada si ya tienes materias cargadas; con `npm run demo -- --force` reemplaza todo el contenido por el de ejemplo.
 
 ---
 
@@ -93,19 +113,115 @@ Por defecto **solo entran los estudiantes que tú registres**. Si prefieres que 
 
 ---
 
-## Publicarlo en internet
+## 2. Publicarlo en Vercel (gratis)
 
-Es una aplicación Node.js normal; sirve cualquier hosting que ejecute Node 22 y tenga un **disco persistente** para la carpeta de datos (base de datos + archivos subidos).
+Vercel **no guarda archivos en su propio disco** (todo lo que se escribe ahí se borra), así que en la nube el portal usa dos servicios gratuitos:
 
-| Variable | Para qué sirve | Valor por defecto |
-| --- | --- | --- |
-| `PORT` | Puerto del servidor | `3000` |
-| `DATA_DIR` | Carpeta de la base de datos y los archivos subidos | `./data` |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | Administrador que se crea la primera vez | `admin` / `admin123` |
-| `MAX_UPLOAD_MB` | Tamaño máximo por archivo | `50` |
-| `TRUST_PROXY` | Pon `1` si está detrás de un proxy (Render, Railway, Nginx…) | — |
+- **Turso** → la base de datos (materias, clases, calendario, estudiantes…).
+- **Vercel Blob (privado)** → los archivos de los materiales. Solo se descargan con la sesión iniciada.
 
-**Con Docker:**
+El código detecta solo dónde está corriendo: en tu computadora usa la carpeta `data/`; en Vercel usa Turso y Blob.
+
+### Paso 1 · Sube el código a la rama `main` de GitHub
+
+Vercel publica la rama `main`. Si trabajas desde la rama de Claude, únela a `main`:
+
+```bash
+git checkout main
+```
+
+```bash
+git pull origin main
+```
+
+```bash
+git merge claude/ecstatic-ramanujan-ry9kwh
+```
+
+```bash
+git push origin main
+```
+
+(También puedes hacerlo desde GitHub abriendo un *Pull request* de la rama hacia `main` y pulsando **Merge**.)
+
+### Paso 2 · Crea la base de datos en Turso
+
+1. Entra a <https://app.turso.tech> y regístrate con tu cuenta de GitHub.
+2. Pulsa **Create Database**, ponle de nombre `economia02` y elige la región **AWS US East (Virginia)** (la más cercana a los servidores de Vercel por defecto).
+3. Dentro de la base, copia la **URL** (empieza por `libsql://…`) → será `TURSO_DATABASE_URL`.
+4. Crea un **token** (botón *Create Token* / *Generate Token*, con permiso de lectura y escritura) y cópialo → será `TURSO_AUTH_TOKEN`.
+
+Guarda ambos valores; los pegarás en Vercel.
+
+### Paso 3 · Importa el proyecto en Vercel
+
+1. Entra a <https://vercel.com/signup> y regístrate con GitHub.
+2. Pulsa **Add New… → Project** y elige el repositorio `sistema-de-economia-02` (si no aparece, pulsa *Adjust GitHub App Permissions* y dale acceso).
+3. Vercel debería detectar **Express** automáticamente. No cambies los comandos de *Build* ni el *Output Directory*.
+4. Abre **Environment Variables** y agrega:
+
+   | Nombre | Valor |
+   | --- | --- |
+   | `TURSO_DATABASE_URL` | la URL `libsql://…` del paso 2 |
+   | `TURSO_AUTH_TOKEN` | el token del paso 2 |
+   | `ADMIN_USER` | el usuario que quieras para el panel (ej. `admin`) |
+   | `ADMIN_PASSWORD` | una contraseña segura (mínimo 8 caracteres) |
+
+5. Pulsa **Deploy** y espera a que termine (1–2 minutos).
+
+### Paso 4 · Conecta el almacenamiento de archivos (Vercel Blob)
+
+1. En tu proyecto de Vercel abre **Storage → Create Database/Storage → Blob**.
+2. Ponle un nombre (ej. `materiales`) y en **Access** elige **Private**.
+3. Conéctalo al proyecto en los entornos **Production**, **Preview** y **Development**. Vercel agrega sola la variable `BLOB_READ_WRITE_TOKEN`.
+4. Ve a **Deployments**, abre el menú **⋯** del último despliegue y pulsa **Redeploy** para que tome la nueva variable.
+
+### Paso 5 · ¡Listo!
+
+Abre la dirección que te da Vercel (algo como `https://sistema-de-economia-02.vercel.app`), entra en la pestaña **Administrador** con el usuario y contraseña que pusiste en `ADMIN_USER` / `ADMIN_PASSWORD`, y empieza a cargar semestres, materias, materiales y estudiantes. Comparte esa dirección con tus compañeros.
+
+- Cada vez que hagas `git push` a `main`, Vercel publica la nueva versión automáticamente.
+- Si al abrir el sitio ves **“Falta un paso de configuración”**, revisa que las variables del paso 3 estén bien escritas y vuelve a desplegar.
+- Si al subir un archivo aparece **“Falta conectar Vercel Blob”**, revisa el paso 4.
+- Puedes poner un dominio propio en **Settings → Domains**.
+
+**Alternativa por terminal (Vercel CLI):** con la base de Turso ya creada:
+
+```bash
+npm install -g vercel
+```
+
+```bash
+vercel login
+```
+
+```bash
+vercel link
+```
+
+```bash
+vercel env add TURSO_DATABASE_URL production
+```
+
+```bash
+vercel env add TURSO_AUTH_TOKEN production
+```
+
+```bash
+vercel env add ADMIN_PASSWORD production
+```
+
+```bash
+vercel blob create-store materiales --access private --yes
+```
+
+```bash
+vercel --prod
+```
+
+### Otras opciones de hosting
+
+Es una aplicación Node.js normal, así que también funciona en cualquier servidor con disco persistente (un VPS, Railway, Render con disco, Docker…), sin Turso ni Blob:
 
 ```bash
 docker build -t portal-economia .
@@ -115,9 +231,17 @@ docker build -t portal-economia .
 docker run -d -p 3000:3000 -v portal-datos:/data -e ADMIN_PASSWORD=tu-clave-segura -e TRUST_PROXY=1 portal-economia
 ```
 
-**En Railway / Render / un VPS:** comando de inicio `npm start`, configura las variables de arriba y monta un volumen/disco en la ruta de `DATA_DIR` (por ejemplo `/data`). ⚠️ Sin disco persistente, los materiales y datos se borran cada vez que el servicio se reinicia.
+| Variable | Para qué sirve | Valor por defecto |
+| --- | --- | --- |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | Administrador que se crea la primera vez | `admin` / `admin123` |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Base de datos en la nube (Turso) | — (usa `DATA_DIR`) |
+| `BLOB_READ_WRITE_TOKEN` | Archivos en Vercel Blob privado | — (usa `DATA_DIR/uploads`) |
+| `DATA_DIR` | Carpeta local de base de datos y archivos | `./data` |
+| `MAX_UPLOAD_MB` | Tamaño máximo por archivo | `50` (local) / `100` (Blob) |
+| `PORT` | Puerto del servidor | `3000` |
+| `TRUST_PROXY` | Pon `1` si está detrás de un proxy (en Vercel es automático) | — |
 
-**Copias de seguridad:** basta con copiar la carpeta `DATA_DIR` (contiene `portal.db` y `uploads/`).
+**Copias de seguridad:** en local basta con copiar la carpeta `data/`. En Turso puedes exportar la base desde su panel.
 
 ---
 
@@ -125,7 +249,7 @@ docker run -d -p 3000:3000 -v portal-datos:/data -e ADMIN_PASSWORD=tu-clave-segu
 
 - La contraseña del administrador se guarda cifrada (scrypt) y las sesiones usan cookies `HttpOnly` / `SameSite`.
 - Solo el administrador puede crear, editar o borrar contenido; los estudiantes únicamente leen y descargan.
-- Los archivos solo se pueden descargar con una sesión iniciada.
+- Los archivos solo se pueden descargar con una sesión iniciada (en Vercel se guardan en un Blob **privado** y el servidor los entrega tras comprobar la sesión).
 - Hay un límite de intentos fallidos de inicio de sesión.
 - **Importante:** la cédula y el correo no son secretos como una contraseña. Cualquiera que conozca la cédula y el correo de un estudiante registrado podría entrar como él. Para un portal de consulta de materiales suele ser suficiente, pero no publiques aquí información confidencial. Sirve el portal siempre con **HTTPS**.
 
@@ -143,7 +267,8 @@ npm test
 
 ```
 server.js              Servidor Express, páginas y manejo de errores
-src/db.js              Esquema SQLite y utilidades
+src/db.js              Base de datos (archivo local o Turso) y esquema
+src/storage.js         Archivos (disco local o Vercel Blob privado)
 src/auth.js            Contraseñas, sesiones y límite de intentos
 src/routes/auth.js     Inicio/cierre de sesión
 src/routes/portal.js   API de lectura (estudiantes y admin) y descarga de archivos
@@ -151,8 +276,9 @@ src/routes/admin.js    API de administración (CRUD, subidas, importación)
 views/                 login.html, app.html (estudiante), admin.html (panel)
 public/css/styles.css  Sistema de diseño (claro/oscuro, adaptable)
 public/js/             common.js (componentes), student.js, admin.js, login.js
+public/js/vendor/      Cliente de subida de Vercel Blob (npm run build:vendor)
 scripts/seed-demo.js   Datos de ejemplo
 test/                  Pruebas de la API (node:test)
 ```
 
-Sin compilación ni frameworks en el frontend: HTML, CSS y JavaScript puros. Dependencias del servidor: `express` y `multer`.
+Sin compilación ni frameworks en el frontend: HTML, CSS y JavaScript puros. Dependencias del servidor: `express`, `multer`, `@libsql/client` y `@vercel/blob`.

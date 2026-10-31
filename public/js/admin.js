@@ -348,47 +348,86 @@ function uploadModal({ subjectId, classId } = {}) {
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
+  const storageMode = A.settings.storage || 'local';
+  const maxMb = Number(A.settings.max_upload_mb) || 50;
+  if (storageMode === 'missing') {
+    form.querySelector('[data-file-zone]').insertAdjacentHTML(
+      'afterbegin',
+      `<div class="alert warn">${icon('alert')}<span>Para guardar archivos en Vercel falta conectar <strong>Vercel Blob</strong> (Storage → Blob, acceso privado). Mientras tanto puedes agregar enlaces.</span></div>`
+    );
+  }
+
+  const showError = (msg) => {
+    err.innerHTML = `${icon('alert')}<span>${esc(msg)}</span>`;
+    err.hidden = false;
+  };
+  const setProgress = (p) => {
+    const pct = `${Math.min(100, Math.round(p * 100))}%`;
+    form.querySelector('[data-bar]').style.width = pct;
+    form.querySelector('[data-pct]').textContent = pct;
+  };
+
+  /** Sube los archivos directo del navegador a Vercel Blob (privado) y devuelve sus datos. */
+  async function uploadToBlob(subjectId) {
+    if (!window.VercelBlob) throw new Error('No se pudo cargar el módulo de subida. Recarga la página.');
+    const out = [];
+    for (const [i, f] of files.entries()) {
+      const safe = f.name.normalize('NFC').replace(/[\\/#?%*:|"<>]/g, '_');
+      const res = await window.VercelBlob.upload(`materiales/${subjectId}/${safe}`, f, {
+        access: 'private',
+        handleUploadUrl: '/api/admin/blob-upload',
+        multipart: f.size > 8 * 1024 * 1024,
+        onUploadProgress: ({ percentage }) => setProgress((i + percentage / 100) / files.length),
+      });
+      out.push({ url: res.url, pathname: res.pathname, name: f.name, size: f.size, contentType: res.contentType || f.type });
+    }
+    return out;
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     err.hidden = true;
-    const fd = new FormData();
-    fd.append('subject_id', form.subject_id.value);
-    fd.append('class_id', form.class_id.value);
-    fd.append('title', form.title.value);
-    fd.append('description', form.description.value);
-    fd.append('kind', kind);
+    const subjectId = form.querySelector('[name=subject_id]').value;
+    const base = {
+      subject_id: subjectId,
+      class_id: form.querySelector('[name=class_id]').value,
+      title: form.querySelector('[name=title]').value,
+      description: form.querySelector('[name=description]').value,
+      kind,
+    };
+    const url = form.querySelector('[name=url]').value.trim();
     if (kind === 'file') {
-      if (!files.length) {
-        err.innerHTML = `${icon('alert')}<span>Selecciona al menos un archivo</span>`;
-        err.hidden = false;
-        return;
-      }
-      files.forEach((f) => fd.append('files', f, f.name));
-    } else {
-      if (!form.url.value.trim()) {
-        err.innerHTML = `${icon('alert')}<span>Escribe el enlace</span>`;
-        err.hidden = false;
-        return;
-      }
-      fd.append('url', form.url.value.trim());
+      if (!files.length) return showError('Selecciona al menos un archivo');
+      if (storageMode === 'missing') return showError('Falta conectar Vercel Blob para guardar archivos.');
+      const big = files.find((f) => f.size > maxMb * 1024 * 1024);
+      if (big) return showError(`"${big.name}" supera el máximo de ${maxMb} MB`);
+    } else if (!url) {
+      return showError('Escribe el enlace');
     }
+
     const btn = form.querySelector('[type=submit]');
     const prog = form.querySelector('[data-progress]');
     setBusy(btn, true, 'Subiendo…');
     prog.hidden = kind !== 'file';
+    setProgress(0);
     try {
-      const created = await apiUpload('/admin/materials', fd, {
-        onProgress: (p) => {
-          form.querySelector('[data-bar]').style.width = `${Math.round(p * 100)}%`;
-          form.querySelector('[data-pct]').textContent = `${Math.round(p * 100)}%`;
-        },
-      });
+      let created;
+      if (kind === 'link') {
+        created = await api('/admin/materials', { method: 'POST', body: { ...base, url } });
+      } else if (storageMode === 'blob') {
+        const uploaded = await uploadToBlob(subjectId);
+        created = await api('/admin/materials', { method: 'POST', body: { ...base, files: uploaded } });
+      } else {
+        const fd = new FormData();
+        for (const [k, v] of Object.entries(base)) fd.append(k, v);
+        files.forEach((f) => fd.append('files', f, f.name));
+        created = await apiUpload('/admin/materials', fd, { onProgress: setProgress });
+      }
       toast(created.length > 1 ? `${created.length} materiales subidos` : 'Material publicado');
       m.close();
       Router.refresh();
     } catch (ex) {
-      err.innerHTML = `${icon('alert')}<span>${esc(ex.message)}</span>`;
-      err.hidden = false;
+      showError(ex.message);
       prog.hidden = true;
       setBusy(btn, false);
     }

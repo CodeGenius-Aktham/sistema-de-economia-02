@@ -1,9 +1,8 @@
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
 const express = require('express');
-const { all, get, run, UPLOAD_DIR } = require('../db');
+const { all, get, run } = require('../db');
+const storage = require('../storage');
 const { requireAuth } = require('../auth');
 const { notFound, bad, id, str, isDate, today } = require('../util');
 
@@ -19,8 +18,10 @@ const EVENT_SELECT = `
     LEFT JOIN subjects s   ON s.id = e.subject_id
     LEFT JOIN semesters sem ON sem.id = s.semester_id`;
 
+// La URL interna de los archivos no se expone: se descargan por /api/materials/:id/file.
 const MATERIAL_SELECT = `
-  SELECT m.id, m.subject_id, m.class_id, m.title, m.description, m.kind, m.url,
+  SELECT m.id, m.subject_id, m.class_id, m.title, m.description, m.kind,
+         CASE WHEN m.kind = 'link' THEN m.url END AS url,
          m.original_name, m.mime, m.size, m.created_at,
          s.name AS subject_name, s.color AS subject_color, s.semester_id AS semester_id,
          c.title AS class_title
@@ -52,26 +53,28 @@ function listSubjects(semesterId, t) {
   );
 }
 
-function subjectDetail(subjectId) {
-  const subject = get(
-    `SELECT s.*, sem.name AS semester_name, sem.period AS semester_period
-       FROM subjects s JOIN semesters sem ON sem.id = s.semester_id
-      WHERE s.id = ?`,
-    subjectId
-  );
+async function subjectDetail(subjectId) {
+  const [subject, classes, materials, events] = await Promise.all([
+    get(
+      `SELECT s.*, sem.name AS semester_name, sem.period AS semester_period
+         FROM subjects s JOIN semesters sem ON sem.id = s.semester_id
+        WHERE s.id = ?`,
+      subjectId
+    ),
+    all(
+      `SELECT c.*, (SELECT COUNT(*) FROM materials m WHERE m.class_id = c.id) AS material_count
+         FROM classes c WHERE c.subject_id = ?
+        ORDER BY c.date IS NULL, c.date, c.id`,
+      subjectId
+    ),
+    all(`${MATERIAL_SELECT} WHERE m.subject_id = ? ORDER BY m.created_at DESC, m.id DESC`, subjectId),
+    all(`${EVENT_SELECT} WHERE e.subject_id = ? ORDER BY e.date, e.start_time`, subjectId),
+  ]);
   if (!subject) return null;
-  subject.classes = all(
-    `SELECT c.*, (SELECT COUNT(*) FROM materials m WHERE m.class_id = c.id) AS material_count
-       FROM classes c WHERE c.subject_id = ?
-      ORDER BY c.date IS NULL, c.date, c.id`,
-    subjectId
-  );
-  subject.materials = all(`${MATERIAL_SELECT} WHERE m.subject_id = ? ORDER BY m.created_at DESC, m.id DESC`, subjectId);
-  subject.events = all(`${EVENT_SELECT} WHERE e.subject_id = ? ORDER BY e.date, e.start_time`, subjectId);
-  return subject;
+  return Object.assign(subject, { classes, materials, events });
 }
 
-function listEvents({ from, to, semesterId, subjectId }) {
+function listEvents({ from, to, semesterId, subjectId, limit }) {
   const where = [];
   const params = [];
   if (from) {
@@ -89,8 +92,8 @@ function listEvents({ from, to, semesterId, subjectId }) {
     where.push('(s.semester_id = ? OR e.subject_id IS NULL)');
     params.push(semesterId);
   }
-  const sql = `${EVENT_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.date, e.start_time IS NULL, e.start_time, e.id`;
-  return all(sql, ...params);
+  const lim = limit ? `LIMIT ${Math.min(Math.max(Number(limit) || 1, 1), 1000)}` : '';
+  return all(`${EVENT_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.date, e.start_time IS NULL, e.start_time, e.id ${lim}`, ...params);
 }
 
 function listMaterials({ subjectId, semesterId, q, limit }) {
@@ -126,29 +129,29 @@ function semesterFor(req) {
 
 /* ---------- rutas ---------- */
 
-router.get('/semesters', (req, res) => {
-  res.json(listSemesters());
+router.get('/semesters', async (req, res) => {
+  res.json(await listSemesters());
 });
 
-router.get('/subjects', (req, res) => {
-  res.json(listSubjects(id(req.query.semester_id), today(req)));
+router.get('/subjects', async (req, res) => {
+  res.json(await listSubjects(id(req.query.semester_id), today(req)));
 });
 
-router.get('/subjects/:id', (req, res) => {
-  const subject = subjectDetail(id(req.params.id));
+router.get('/subjects/:id', async (req, res) => {
+  const subject = await subjectDetail(id(req.params.id));
   if (!subject) throw notFound('La materia no existe');
   res.json(subject);
 });
 
-router.get('/events', (req, res) => {
+router.get('/events', async (req, res) => {
   const from = isDate(req.query.from) ? req.query.from : null;
   const to = isDate(req.query.to) ? req.query.to : null;
-  res.json(listEvents({ from, to, semesterId: id(req.query.semester_id), subjectId: id(req.query.subject_id) }));
+  res.json(await listEvents({ from, to, semesterId: id(req.query.semester_id), subjectId: id(req.query.subject_id) }));
 });
 
-router.get('/materials', (req, res) => {
+router.get('/materials', async (req, res) => {
   res.json(
-    listMaterials({
+    await listMaterials({
       subjectId: id(req.query.subject_id),
       semesterId: id(req.query.semester_id),
       q: str(req.query.q, 80),
@@ -157,81 +160,57 @@ router.get('/materials', (req, res) => {
   );
 });
 
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', async (req, res) => {
   const t = today(req);
   const semesterId = semesterFor(req);
   const in30 = new Date(t + 'T00:00:00Z');
   in30.setUTCDate(in30.getUTCDate() + 30);
   const to30 = in30.toISOString().slice(0, 10);
-
-  const upcoming = listEvents({ from: t, semesterId }).slice(0, 8);
-  const recentMaterials = listMaterials({ semesterId, limit: 6 });
-  const subjects = listSubjects(semesterId, t);
   const semFilter = semesterId ? 'WHERE s.semester_id = ?' : '';
   const semParams = semesterId ? [semesterId] : [];
+
+  const [upcoming, recentMaterials, subjects, semester, materialCount, upcoming30] = await Promise.all([
+    listEvents({ from: t, semesterId, limit: 8 }),
+    listMaterials({ semesterId, limit: 6 }),
+    listSubjects(semesterId, t),
+    semesterId ? get('SELECT * FROM semesters WHERE id = ?', semesterId) : null,
+    get(`SELECT COUNT(*) AS n FROM materials m JOIN subjects s ON s.id = m.subject_id ${semFilter}`, ...semParams),
+    get(
+      `SELECT COUNT(*) AS n FROM events e LEFT JOIN subjects s ON s.id = e.subject_id
+        WHERE e.date >= ? AND e.date <= ? ${semesterId ? 'AND (s.semester_id = ? OR e.subject_id IS NULL)' : ''}`,
+      t,
+      to30,
+      ...semParams
+    ),
+  ]);
 
   res.json({
     today: t,
     semester_id: semesterId,
-    semester: semesterId ? get('SELECT * FROM semesters WHERE id = ?', semesterId) : null,
+    semester: semester || null,
     upcoming,
     recentMaterials,
     subjects,
-    counts: {
-      subjects: subjects.length,
-      materials: get(`SELECT COUNT(*) AS n FROM materials m JOIN subjects s ON s.id = m.subject_id ${semFilter}`, ...semParams).n,
-      upcoming30: listEvents({ from: t, to: to30, semesterId }).length,
-    },
+    counts: { subjects: subjects.length, materials: materialCount.n, upcoming30: upcoming30.n },
   });
 });
 
 /* ---------- archivos ---------- */
 
-const INLINE_TYPES = {
-  '.pdf': 'application/pdf',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
-  '.wav': 'audio/wav',
-  '.txt': 'text/plain; charset=utf-8',
-};
-
-function contentDisposition(type, filename) {
-  const fallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `${type}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
-}
-
-router.get('/materials/:id/file', (req, res) => {
-  const m = get('SELECT * FROM materials WHERE id = ?', id(req.params.id));
-  if (!m || m.kind !== 'file' || !m.file_name) throw notFound('El archivo no existe');
-  const filePath = path.join(UPLOAD_DIR, path.basename(m.file_name));
-  if (!fs.existsSync(filePath)) throw notFound('El archivo ya no está disponible');
-
-  const name = m.original_name || m.file_name;
-  const ext = path.extname(name).toLowerCase();
-  const inlineType = INLINE_TYPES[ext];
-  const wantsInline = req.query.download !== '1' && inlineType;
-
-  res.setHeader('Content-Type', wantsInline ? inlineType : 'application/octet-stream');
-  res.setHeader('Content-Disposition', contentDisposition(wantsInline ? 'inline' : 'attachment', name));
-  res.setHeader('Cache-Control', 'private, max-age=3600');
-  res.sendFile(filePath);
+router.get('/materials/:id/file', async (req, res) => {
+  const m = await get('SELECT * FROM materials WHERE id = ?', id(req.params.id));
+  if (!m || m.kind !== 'file') throw notFound('El archivo no existe');
+  await storage.sendFile(req, res, m);
 });
 
 /* ---------- perfil del estudiante ---------- */
 
-router.put('/me', (req, res) => {
+router.put('/me', async (req, res) => {
   if (req.auth.role !== 'student') throw bad('Solo los estudiantes tienen perfil editable aquí');
   const name = str(req.body.name, 120);
   let semesterId = id(req.body.semester_id);
-  if (semesterId && !get('SELECT id FROM semesters WHERE id = ?', semesterId)) semesterId = null;
-  run('UPDATE students SET name = ?, semester_id = ? WHERE id = ?', name, semesterId, req.auth.user.id);
+  if (semesterId && !(await get('SELECT id FROM semesters WHERE id = ?', semesterId))) semesterId = null;
+  await run('UPDATE students SET name = ?, semester_id = ? WHERE id = ?', name, semesterId, req.auth.user.id);
   res.json({ ok: true });
 });
 

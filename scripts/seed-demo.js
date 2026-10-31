@@ -8,16 +8,16 @@
  * Estudiante de prueba: cédula 12345678 · correo estudiante@demo.com
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-const crypto = require('node:crypto');
-const { all, get, run, tx, UPLOAD_DIR, setSetting } = require('../src/db');
+try {
+  process.loadEnvFile();
+} catch {
+  /* sin .env */
+}
+
+const { all, get, run, batch, ready, setSettingSql } = require('../src/db');
+const storage = require('../src/storage');
 
 const force = process.argv.includes('--force');
-if (get('SELECT COUNT(*) AS n FROM subjects').n > 0 && !force) {
-  console.log('Ya hay materias cargadas. Usa "npm run demo -- --force" para reemplazarlas por los datos de ejemplo.');
-  process.exit(0);
-}
 
 const pad = (n) => String(n).padStart(2, '0');
 const day = (offset) => {
@@ -48,11 +48,6 @@ function makePdf(title, lines) {
   return Buffer.from(out, 'latin1');
 }
 
-function saveFile(name, buffer) {
-  const stored = crypto.randomUUID() + path.extname(name).toLowerCase();
-  fs.writeFileSync(path.join(UPLOAD_DIR, stored), buffer);
-  return { stored, size: buffer.length };
-}
 
 const DATA = [
   {
@@ -85,23 +80,29 @@ const DATA = [
   },
 ];
 
-tx(() => {
+async function main() {
+  await ready();
+  if ((await get('SELECT COUNT(*) AS n FROM subjects')).n > 0 && !force) {
+    console.log('Ya hay materias cargadas. Usa "npm run demo -- --force" para reemplazarlas por los datos de ejemplo.');
+    return;
+  }
   if (force) {
-    for (const r of all("SELECT file_name FROM materials WHERE kind = 'file'")) fs.rmSync(path.join(UPLOAD_DIR, r.file_name), { force: true });
-    run('DELETE FROM events');
-    run('DELETE FROM semesters');
+    await storage.removeFiles(await all("SELECT * FROM materials WHERE kind = 'file'"));
+    await batch([['DELETE FROM events'], ['DELETE FROM materials'], ['DELETE FROM classes'], ['DELETE FROM subjects'], ['UPDATE students SET semester_id = NULL'], ['DELETE FROM semesters']]);
   }
 
-  setSetting('site_name', 'Economía 02');
-  setSetting('site_tagline', 'Portal académico');
-  setSetting('university', 'Escuela de Economía');
-  setSetting('period', '2026-II');
+  await batch([
+    setSettingSql('site_name', 'Economía 02'),
+    setSettingSql('site_tagline', 'Portal académico'),
+    setSettingSql('university', 'Escuela de Economía'),
+    setSettingSql('period', '2026-II'),
+  ]);
 
   const subjectIds = {};
-  DATA.forEach((sem, i) => {
-    const semId = run('INSERT INTO semesters (name, number, period, position) VALUES (?, ?, ?, ?)', sem.name, sem.number, '2026-II', i + 1).lastInsertRowid;
-    sem.subjects.forEach(([name, code, color, professor, schedule, classroom], j) => {
-      subjectIds[code] = run(
+  for (const [i, sem] of DATA.entries()) {
+    const semId = (await run('INSERT INTO semesters (name, number, period, position) VALUES (?, ?, ?, ?)', sem.name, sem.number, '2026-II', i + 1)).lastInsertRowid;
+    for (const [j, [name, code, color, professor, schedule, classroom]] of sem.subjects.entries()) {
+      subjectIds[code] = (await run(
         `INSERT INTO subjects (semester_id, name, code, color, professor, professor_email, schedule, classroom, credits, position, description)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         semId,
@@ -115,9 +116,9 @@ tx(() => {
         j === 0 ? 5 : 4,
         j + 1,
         `Objetivo: que el estudiante domine los fundamentos de ${name.toLowerCase()} y sepa aplicarlos a problemas reales.\n\nEvaluación:\n• Primer parcial — 25%\n• Segundo parcial — 25%\n• Quices — 15%\n• Trabajo final — 20%\n• Examen final — 15%\n\nBibliografía principal disponible en la biblioteca y en la pestaña Materiales.`
-      ).lastInsertRowid;
-    });
-  });
+      )).lastInsertRowid;
+    }
+  }
 
   const classes = {
     'ECO-301': [
@@ -142,9 +143,9 @@ tx(() => {
   };
   const classIds = {};
   for (const [code, list] of Object.entries(classes)) {
-    list.forEach(([title, offset, content]) => {
-      classIds[`${code}:${title}`] = run('INSERT INTO classes (subject_id, title, date, content) VALUES (?, ?, ?, ?)', subjectIds[code], title, day(offset), content).lastInsertRowid;
-    });
+    for (const [title, offset, content] of list) {
+      classIds[`${code}:${title}`] = (await run('INSERT INTO classes (subject_id, title, date, content) VALUES (?, ?, ?, ?)', subjectIds[code], title, day(offset), content)).lastInsertRowid;
+    }
   }
 
   const files = [
@@ -156,17 +157,19 @@ tx(() => {
     ['MAT-301', 'Anualidades', 'Tabla de amortización.csv', 'Plantilla para construir la tabla de amortización.', Buffer.from('periodo,cuota,interes,amortizacion,saldo\n0,,,,10000\n')],
   ];
   for (const [code, cls, name, desc, buf] of files) {
-    const f = saveFile(name, buf);
-    run(
-      `INSERT INTO materials (subject_id, class_id, title, description, kind, file_name, original_name, mime, size)
-       VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?)`,
+    const mime = name.endsWith('.pdf') ? 'application/pdf' : 'text/csv';
+    const f = await storage.saveBuffer(name, buf, mime);
+    await run(
+      `INSERT INTO materials (subject_id, class_id, title, description, kind, url, file_name, original_name, mime, size)
+       VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?, ?)`,
       subjectIds[code],
       cls ? classIds[`${code}:${cls}`] : null,
       name.replace(/\.[^.]+$/, ''),
       desc,
-      f.stored,
+      f.url,
+      f.file_name,
       name,
-      name.endsWith('.pdf') ? 'application/pdf' : 'text/csv',
+      mime,
       f.size
     );
   }
@@ -177,9 +180,15 @@ tx(() => {
     ['ECO-302', null, 'Carpeta compartida de la materia', 'https://drive.google.com/'],
     ['MAT-301', null, 'Simulador de préstamos', 'https://www.calculator.net/loan-calculator.html'],
   ];
-  for (const [code, cls, title, url] of links) {
-    run("INSERT INTO materials (subject_id, class_id, title, kind, url) VALUES (?, ?, ?, 'link', ?)", subjectIds[code], cls ? classIds[`${code}:${cls}`] : null, title, url);
-  }
+  await batch(
+    links.map(([code, cls, title, url]) => [
+      "INSERT INTO materials (subject_id, class_id, title, kind, url) VALUES (?, ?, ?, 'link', ?)",
+      subjectIds[code],
+      cls ? classIds[`${code}:${cls}`] : null,
+      title,
+      url,
+    ])
+  );
 
   const events = [
     ['ECO-302', 'Quiz: Teoría de juegos', 'quiz', 2, '09:00', '09:30', 'Aula 12', 'Equilibrio de Nash en juegos simultáneos.'],
@@ -193,8 +202,8 @@ tx(() => {
     [null, 'Semana de receso', 'otro', 30, null, null, null, 'No hay clases.'],
     ['MAT-301', 'Quiz de interés compuesto', 'quiz', -4, '07:00', '07:30', 'Aula 9', null],
   ];
-  for (const [code, title, type, offset, start, end, location, desc] of events) {
-    run(
+  await batch(
+    events.map(([code, title, type, offset, start, end, location, desc]) => [
       'INSERT INTO events (subject_id, title, type, date, start_time, end_time, location, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       code ? subjectIds[code] : null,
       title,
@@ -203,24 +212,29 @@ tx(() => {
       start,
       end,
       location,
-      desc
-    );
-  }
-
-  const sem3 = get("SELECT id FROM semesters WHERE name = 'Semestre III'").id;
-  run(
-    `INSERT INTO students (cedula, email, name, semester_id) VALUES ('12345678', 'estudiante@demo.com', 'María Pérez', ?)
-     ON CONFLICT(cedula) DO UPDATE SET email = excluded.email, name = excluded.name, semester_id = excluded.semester_id, active = 1`,
-    sem3
+      desc,
+    ])
   );
-  for (const [c, e, n] of [
-    ['23456789', 'jose.gomez@demo.com', 'José Gómez'],
-    ['34567890', 'ana.ruiz@demo.com', 'Ana Ruiz'],
-    ['45678901', 'carlos.lopez@demo.com', 'Carlos López'],
-  ]) {
-    run('INSERT OR IGNORE INTO students (cedula, email, name, semester_id) VALUES (?, ?, ?, ?)', c, e, n, sem3);
-  }
-});
 
-console.log('Datos de ejemplo cargados.');
-console.log('  Estudiante de prueba → cédula: 12345678 · correo: estudiante@demo.com');
+  const sem3 = (await get("SELECT id FROM semesters WHERE name = 'Semestre III'")).id;
+  await batch([
+    [
+      `INSERT INTO students (cedula, email, name, semester_id) VALUES ('12345678', 'estudiante@demo.com', 'María Pérez', ?)
+       ON CONFLICT(cedula) DO UPDATE SET email = excluded.email, name = excluded.name, semester_id = excluded.semester_id, active = 1`,
+      sem3,
+    ],
+    ...[
+      ['23456789', 'jose.gomez@demo.com', 'José Gómez'],
+      ['34567890', 'ana.ruiz@demo.com', 'Ana Ruiz'],
+      ['45678901', 'carlos.lopez@demo.com', 'Carlos López'],
+    ].map(([c, e, n]) => ['INSERT OR IGNORE INTO students (cedula, email, name, semester_id) VALUES (?, ?, ?, ?)', c, e, n, sem3]),
+  ]);
+
+  console.log('Datos de ejemplo cargados.');
+  console.log('  Estudiante de prueba → cédula: 12345678 · correo: estudiante@demo.com');
+}
+
+main().catch((err) => {
+  console.error('No se pudieron cargar los datos de ejemplo:', err.message);
+  process.exit(1);
+});

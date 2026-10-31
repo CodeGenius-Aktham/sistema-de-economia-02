@@ -1,11 +1,19 @@
 'use strict';
 
+// Variables de entorno desde .env (solo si existe; en Vercel se configuran en el panel).
+try {
+  process.loadEnvFile();
+} catch {
+  /* sin archivo .env */
+}
+
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const multer = require('multer');
 
-const { get, run } = require('./src/db');
+const db = require('./src/db');
+const storage = require('./src/storage');
 const auth = require('./src/auth');
 const { HttpError } = require('./src/util');
 const authRoutes = require('./src/routes/auth');
@@ -13,28 +21,11 @@ const portalRoutes = require('./src/routes/portal');
 const adminRoutes = require('./src/routes/admin');
 const pkg = require('./package.json');
 
-/* ---------- administrador inicial ---------- */
-
-if (!get('SELECT id FROM admins LIMIT 1')) {
-  const username = process.env.ADMIN_USER || 'admin';
-  const password = process.env.ADMIN_PASSWORD || 'admin123';
-  run(
-    'INSERT INTO admins (username, name, password_hash, must_change) VALUES (?, ?, ?, ?)',
-    username,
-    'Administrador',
-    auth.hashPassword(password),
-    process.env.ADMIN_PASSWORD ? 0 : 1
-  );
-  console.log(`\n  Administrador creado → usuario: "${username}"` + (process.env.ADMIN_PASSWORD ? '' : `, contraseña: "${password}" (cámbiala al entrar)`) + '\n');
-}
-auth.cleanupSessions();
-
-/* ---------- app ---------- */
-
 const app = express();
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY) {
-  const v = process.env.TRUST_PROXY;
+
+if (process.env.TRUST_PROXY || db.IS_VERCEL) {
+  const v = process.env.TRUST_PROXY || 'true';
   app.set('trust proxy', /^\d+$/.test(v) ? Number(v) : v === 'true' ? true : v);
 }
 
@@ -46,19 +37,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '2mb' }));
-app.use(auth.loadSession);
-
-/* ---------- API ---------- */
-
-app.use('/api/auth', authRoutes.router);
-app.use('/api/admin', adminRoutes.router);
-app.use('/api', portalRoutes.router);
-app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
+// Archivos estáticos (en Vercel los sirve su CDN desde public/ y esto se ignora).
+app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '7d' }));
 
 /* ---------- páginas ---------- */
 
-const VIEWS = path.join(__dirname, 'views');
 const ASSET_VERSION = `${pkg.version}-${Date.now().toString(36)}`;
 const CSP = [
   "default-src 'self'",
@@ -68,16 +51,18 @@ const CSP = [
   "img-src 'self' data:",
   "media-src 'self'",
   "frame-src 'self'",
-  "connect-src 'self'",
+  `connect-src 'self'${storage.MODE === 'blob' ? ' https://vercel.com https://*.blob.vercel-storage.com' : ''}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
 ].join('; ');
 
-const pages = {};
-for (const name of ['login', 'app', 'admin']) {
-  pages[name] = fs.readFileSync(path.join(VIEWS, `${name}.html`), 'utf8').replaceAll('__V__', ASSET_VERSION);
-}
+const page = (file) => fs.readFileSync(file, 'utf8').replaceAll('__V__', ASSET_VERSION);
+const pages = {
+  login: page(path.join(__dirname, 'views', 'login.html')),
+  app: page(path.join(__dirname, 'views', 'app.html')),
+  admin: page(path.join(__dirname, 'views', 'admin.html')),
+};
 
 function sendPage(res, name) {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -85,6 +70,38 @@ function sendPage(res, name) {
   res.setHeader('Cache-Control', 'no-cache');
   res.send(pages[name]);
 }
+
+function setupErrorPage(message) {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Configuración pendiente</title><link rel="stylesheet" href="/css/styles.css?v=${ASSET_VERSION}"></head>
+<body><div class="login-panel" style="min-height:100vh"><div class="login-card"><h2>Falta un paso de configuración</h2>
+<div class="alert warn"><span>${message.replace(/[<>&]/g, '')}</span></div>
+<p class="muted small">Revisa la guía de despliegue en el README del proyecto.</p></div></div></body></html>`;
+}
+
+/* ---------- base de datos lista antes de atender ---------- */
+
+app.use(async (req, res, next) => {
+  try {
+    await db.ready();
+    next();
+  } catch (err) {
+    const message = err.status === 503 ? err.message : 'No se pudo conectar con la base de datos. Revisa TURSO_DATABASE_URL y TURSO_AUTH_TOKEN.';
+    if (err.status !== 503) console.error(err);
+    if (req.path.startsWith('/api/')) return res.status(503).json({ error: message });
+    res.status(503).type('html').send(setupErrorPage(message));
+  }
+});
+
+app.use(express.json({ limit: '2mb' }));
+app.use(auth.loadSession);
+
+/* ---------- API ---------- */
+
+app.use('/api/auth', authRoutes.router);
+app.use('/api/admin', adminRoutes.router);
+app.use('/api', portalRoutes.router);
+app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 
 app.get('/', (req, res) => {
   if (req.auth) return res.redirect(req.auth.role === 'admin' ? '/admin' : '/app');
@@ -101,13 +118,6 @@ app.get('/admin', (req, res) => {
   sendPage(res, 'admin');
 });
 
-app.use(
-  express.static(path.join(__dirname, 'public'), {
-    index: false,
-    maxAge: '7d',
-  })
-);
-
 app.use((req, res) => {
   if (req.method === 'GET' && req.accepts('html')) return res.redirect('/');
   res.status(404).send('No encontrado');
@@ -123,27 +133,28 @@ app.use((err, req, res, next) => {
     status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
     message =
       err.code === 'LIMIT_FILE_SIZE'
-        ? `El archivo supera el tamaño máximo de ${adminRoutes.MAX_UPLOAD_MB} MB`
+        ? `El archivo supera el tamaño máximo de ${storage.MAX_UPLOAD_MB} MB`
         : err.code === 'LIMIT_FILE_COUNT'
           ? 'Puedes subir máximo 20 archivos a la vez'
           : 'No se pudo procesar el archivo';
   } else if (err.type === 'entity.parse.failed') {
     status = 400;
     message = 'Solicitud inválida';
-  } else if (!(err instanceof HttpError) && status >= 500) {
+  } else if (!(err instanceof HttpError) && status >= 500 && status !== 503) {
     console.error(err);
     message = 'Ocurrió un error en el servidor';
   }
-  if (res.headersSent) return;
+  if (res.headersSent) return res.end();
   res.status(status).json({ error: message });
 });
 
-/* ---------- inicio ---------- */
+/* ---------- inicio (local) ---------- */
 
-const PORT = Number(process.env.PORT) || 3000;
 if (require.main === module) {
+  const PORT = Number(process.env.PORT) || 3000;
   app.listen(PORT, () => {
-    console.log(`  Portal académico listo en http://localhost:${PORT}`);
+    console.log(`Portal académico listo en http://localhost:${PORT}`);
+    console.log(`Base de datos: ${db.IS_REMOTE ? 'Turso (nube)' : 'archivo local en ' + db.DATA_DIR} · Archivos: ${storage.MODE === 'blob' ? 'Vercel Blob' : 'disco local'}`);
   });
 }
 

@@ -54,10 +54,10 @@ function writeCookie(req, res, value, maxAge) {
   res.append('Set-Cookie', parts.join('; '));
 }
 
-function createSession(req, res, role, userId) {
+async function createSession(req, res, role, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   const ttl = role === 'admin' ? ADMIN_TTL : STUDENT_TTL;
-  run(
+  await run(
     'INSERT INTO sessions (token_hash, role, user_id, expires_at) VALUES (?, ?, ?, ?)',
     sha256(token),
     role,
@@ -67,35 +67,46 @@ function createSession(req, res, role, userId) {
   writeCookie(req, res, token, ttl);
 }
 
-function destroySession(req, res) {
+async function destroySession(req, res) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
-  if (token) run('DELETE FROM sessions WHERE token_hash = ?', sha256(token));
+  if (token) await run('DELETE FROM sessions WHERE token_hash = ?', sha256(token));
   writeCookie(req, res, '', 0);
 }
 
-function cleanupSessions() {
-  run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
-}
-
-/** Carga la sesión (si existe) en req.auth = { role, user }. */
-function loadSession(req, res, next) {
+/** Carga la sesión (si existe) en req.auth = { role, user } con una sola consulta. */
+async function loadSession(req, res, next) {
   req.auth = null;
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return next();
-  const s = get('SELECT * FROM sessions WHERE token_hash = ?', sha256(token));
+  const s = await get(
+    `SELECT s.role, s.user_id, s.expires_at,
+            a.id AS admin_id, a.username, a.name AS admin_name, a.must_change,
+            st.id AS student_id, st.cedula, st.email, st.name AS student_name, st.semester_id, st.active,
+            sem.name AS semester_name
+       FROM sessions s
+       LEFT JOIN admins a     ON s.role = 'admin'   AND a.id = s.user_id
+       LEFT JOIN students st  ON s.role = 'student' AND st.id = s.user_id
+       LEFT JOIN semesters sem ON sem.id = st.semester_id
+      WHERE s.token_hash = ?`,
+    sha256(token)
+  );
   if (!s || s.expires_at < Date.now()) return next();
 
-  if (s.role === 'admin') {
-    const user = get('SELECT id, username, name, must_change FROM admins WHERE id = ?', s.user_id);
-    if (user) req.auth = { role: 'admin', user };
-  } else {
-    const user = get(
-      `SELECT st.id, st.cedula, st.email, st.name, st.semester_id, st.active, sem.name AS semester_name
-         FROM students st LEFT JOIN semesters sem ON sem.id = st.semester_id
-        WHERE st.id = ?`,
-      s.user_id
-    );
-    if (user && user.active) req.auth = { role: 'student', user };
+  if (s.role === 'admin' && s.admin_id) {
+    req.auth = { role: 'admin', user: { id: s.admin_id, username: s.username, name: s.admin_name, must_change: s.must_change } };
+  } else if (s.role === 'student' && s.student_id && s.active) {
+    req.auth = {
+      role: 'student',
+      user: {
+        id: s.student_id,
+        cedula: s.cedula,
+        email: s.email,
+        name: s.student_name,
+        semester_id: s.semester_id,
+        active: s.active,
+        semester_name: s.semester_name,
+      },
+    };
   }
   next();
 }
@@ -145,7 +156,6 @@ function clearFailures(req, identifier) {
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of attempts) if (v.reset < now) attempts.delete(k);
-  cleanupSessions();
 }, 30 * 60 * 1000).unref();
 
 module.exports = {
@@ -153,7 +163,6 @@ module.exports = {
   verifyPassword,
   createSession,
   destroySession,
-  cleanupSessions,
   loadSession,
   requireAuth,
   requireAdmin,

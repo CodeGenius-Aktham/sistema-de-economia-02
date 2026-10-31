@@ -1,19 +1,49 @@
 'use strict';
 
+/**
+ * Base de datos SQLite a través de libSQL:
+ *  - En tu computadora: un archivo local (DATA_DIR/portal.db), sin configurar nada.
+ *  - En Vercel: una base de datos Turso (variables TURSO_DATABASE_URL y TURSO_AUTH_TOKEN),
+ *    porque Vercel no conserva archivos entre ejecuciones.
+ */
+
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+const { createClient } = require('@libsql/client');
 
+/** Busca una variable por su nombre exacto o con prefijo (p. ej. "STORAGE_TURSO_DATABASE_URL"). */
+function env(...names) {
+  for (const n of names) if (process.env[n]) return process.env[n];
+  for (const n of names) {
+    const key = Object.keys(process.env).find((k) => k.endsWith('_' + n) && process.env[k]);
+    if (key) return process.env[key];
+  }
+  return null;
+}
+
+const IS_VERCEL = !!process.env.VERCEL;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, 'portal.db'));
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec('PRAGMA foreign_keys = ON;');
-db.exec('PRAGMA busy_timeout = 5000;');
+let remoteUrl = env('TURSO_DATABASE_URL', 'LIBSQL_URL', 'TURSO_URL');
+if (!remoteUrl && /^(libsql|https?|wss?):\/\//.test(process.env.DATABASE_URL || '')) remoteUrl = process.env.DATABASE_URL;
+const authToken = env('TURSO_AUTH_TOKEN', 'LIBSQL_AUTH_TOKEN', 'TURSO_TOKEN', 'DATABASE_AUTH_TOKEN');
 
-db.exec(`
+const IS_REMOTE = !!remoteUrl;
+let client = null;
+let configError = null;
+
+if (IS_REMOTE) {
+  client = createClient({ url: remoteUrl, authToken: authToken || undefined });
+} else if (IS_VERCEL) {
+  configError =
+    'Falta conectar la base de datos. En Vercel → Settings → Environment Variables agrega TURSO_DATABASE_URL y TURSO_AUTH_TOKEN, y vuelve a desplegar.';
+} else {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  client = createClient({ url: 'file:' + path.join(DATA_DIR, 'portal.db') });
+}
+
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
@@ -114,22 +144,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_subjects_semester ON subjects(semester_id);
 CREATE INDEX IF NOT EXISTS idx_classes_subject   ON classes(subject_id);
 CREATE INDEX IF NOT EXISTS idx_materials_subject ON materials(subject_id);
+CREATE INDEX IF NOT EXISTS idx_materials_class   ON materials(class_id);
 CREATE INDEX IF NOT EXISTS idx_events_date       ON events(date);
 CREATE INDEX IF NOT EXISTS idx_events_subject    ON events(subject_id);
+CREATE INDEX IF NOT EXISTS idx_students_email    ON students(email);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires  ON sessions(expires_at);
-`);
+`;
 
 /* ---------- helpers ---------- */
-
-const cache = new Map();
-function stmt(sql) {
-  let s = cache.get(sql);
-  if (!s) {
-    s = db.prepare(sql);
-    cache.set(sql, s);
-  }
-  return s;
-}
 
 function clean(params) {
   return params.map((p) => {
@@ -139,23 +161,49 @@ function clean(params) {
   });
 }
 
-const all = (sql, ...params) => stmt(sql).all(...clean(params));
-const get = (sql, ...params) => stmt(sql).get(...clean(params));
-const run = (sql, ...params) => stmt(sql).run(...clean(params));
-
-function tx(fn) {
-  db.exec('BEGIN');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+function toObjects(rs) {
+  return rs.rows.map((row) => {
+    const o = {};
+    rs.columns.forEach((c, i) => {
+      o[c] = typeof row[i] === 'bigint' ? Number(row[i]) : row[i];
+    });
+    return o;
+  });
 }
 
-/* ---------- settings ---------- */
+function db() {
+  if (!client) throw Object.assign(new Error(configError), { status: 503 });
+  return client;
+}
+
+async function all(sql, ...params) {
+  return toObjects(await db().execute({ sql, args: clean(params) }));
+}
+
+async function get(sql, ...params) {
+  return (await all(sql, ...params))[0];
+}
+
+async function run(sql, ...params) {
+  const rs = await db().execute({ sql, args: clean(params) });
+  return { lastInsertRowid: rs.lastInsertRowid === undefined ? null : Number(rs.lastInsertRowid), changes: rs.rowsAffected };
+}
+
+/** Ejecuta varias sentencias en una sola transacción: q(sql, ...params). */
+async function batch(statements) {
+  if (!statements.length) return [];
+  const results = await db().batch(
+    statements.map(([sql, ...params]) => ({ sql, args: clean(params) })),
+    'write'
+  );
+  return results.map((rs) => ({
+    lastInsertRowid: rs.lastInsertRowid === undefined ? null : Number(rs.lastInsertRowid),
+    changes: rs.rowsAffected,
+    rows: toObjects(rs),
+  }));
+}
+
+/* ---------- ajustes ---------- */
 
 const DEFAULT_SETTINGS = {
   site_name: 'Economía 02',
@@ -166,43 +214,70 @@ const DEFAULT_SETTINGS = {
   welcome_message: 'Aquí encontrarás tus materias, materiales de apoyo y las fechas de evaluación.',
 };
 
-for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-  run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', key, value);
-}
-
-function getSettings() {
+async function getSettings() {
   const out = { ...DEFAULT_SETTINGS };
-  for (const row of all('SELECT key, value FROM settings')) out[row.key] = row.value;
+  for (const row of await all('SELECT key, value FROM settings')) out[row.key] = row.value;
   return out;
 }
 
-function setSetting(key, value) {
-  run(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    key,
-    value
-  );
+const setSettingSql = (key, value) => [
+  'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+  key,
+  value,
+];
+
+/* ---------- inicialización (una vez por proceso) ---------- */
+
+let readyPromise = null;
+
+async function init() {
+  const c = db();
+  if (!IS_REMOTE) {
+    await c.execute('PRAGMA journal_mode = WAL');
+    await c.execute('PRAGMA busy_timeout = 5000');
+  }
+  await c.executeMultiple(SCHEMA);
+  await batch(Object.entries(DEFAULT_SETTINGS).map(([k, v]) => ['INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', k, v]));
+
+  const auth = require('./auth');
+  if (!(await get('SELECT id FROM admins LIMIT 1'))) {
+    const username = process.env.ADMIN_USER || 'admin';
+    const password = process.env.ADMIN_PASSWORD || 'admin123';
+    await run(
+      'INSERT OR IGNORE INTO admins (username, name, password_hash, must_change) VALUES (?, ?, ?, ?)',
+      username,
+      'Administrador',
+      auth.hashPassword(password),
+      process.env.ADMIN_PASSWORD ? 0 : 1
+    );
+    console.log(`Administrador creado → usuario: "${username}"` + (process.env.ADMIN_PASSWORD ? '' : `, contraseña: "${password}" (cámbiala al entrar)`));
+  }
+  await run('DELETE FROM sessions WHERE expires_at < ?', Date.now());
 }
 
-/** Borra del disco los archivos que pertenecen a los materiales indicados. */
-function unlinkFiles(rows) {
-  for (const r of rows) {
-    if (!r || !r.file_name) continue;
-    const p = path.join(UPLOAD_DIR, path.basename(r.file_name));
-    fs.rm(p, { force: true }, () => {});
+function ready() {
+  if (!readyPromise) {
+    readyPromise = init().catch((err) => {
+      readyPromise = null; // se reintenta en la próxima petición
+      throw err;
+    });
   }
+  return readyPromise;
 }
 
 module.exports = {
-  db,
+  env,
+  IS_VERCEL,
+  IS_REMOTE,
   DATA_DIR,
   UPLOAD_DIR,
   all,
   get,
   run,
-  tx,
+  batch,
+  ready,
   getSettings,
-  setSetting,
+  setSettingSql,
   DEFAULT_SETTINGS,
-  unlinkFiles,
+  configError: () => configError,
 };

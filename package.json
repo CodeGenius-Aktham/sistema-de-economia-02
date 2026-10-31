@@ -5,17 +5,26 @@
   "description": "Portal académico universitario: materias por semestre, materiales de apoyo y calendario de evaluaciones, con panel de administración.",
   "main": "server.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server.js",
-    "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch server.js",
-    "demo": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning scripts/seed-demo.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "demo": "node scripts/seed-demo.js",
+    "build:vendor": "node scripts/build-vendor.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20.12"
   },
   "license": "MIT",
   "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@vercel/blob": "^2.8.2",
     "express": "^5.3.0",
     "multer": "^2.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "overrides": {
+    "zod": "^4.6.7"
   }
 }
