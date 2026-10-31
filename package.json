@@ -1,0 +1,21 @@
+{
+  "name": "sistema-de-economia-02",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portal académico universitario: materias por semestre, materiales de apoyo y calendario de evaluaciones, con panel de administración.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server.js",
+    "dev": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning --watch server.js",
+    "demo": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning scripts/seed-demo.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.3.0",
+    "multer": "^2.5.0"
+  }
+}

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f3f4fb" />
+    <meta name="description" content="Portal académico: materias, materiales de apoyo y calendario de evaluaciones." />
+    <title>Ingresar · Portal académico</title>
+    <link rel="icon" href="/img/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+    <link rel="stylesheet" href="/css/styles.css?v=__V__" />
+    <script src="/js/theme.js?v=__V__"></script>
+  </head>
+  <body class="login-body">
+    <div class="login">
+      <div class="login-bg" aria-hidden="true">
+        <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+        <div class="grid-pattern"></div>
+      </div>
+
+      <button type="button" class="icon-btn theme-float" data-theme-toggle></button>
+
+      <section class="login-hero">
+        <div class="brand">
+          <div class="brand-logo" data-brand-logo></div>
+          <div class="brand-text">
+            <strong data-s="site_name">Portal académico</strong>
+            <span data-s="university"></span>
+          </div>
+        </div>
+
+        <h1>Todo tu semestre,<br /><span class="grad-text">en un solo lugar.</span></h1>
+        <p data-s="welcome_message"></p>
+
+        <ul class="features">
+          <li>
+            <span class="f-ico" style="--c: #6366f1"><span data-icon="book"></span></span>
+            <div><strong>Materias por semestre</strong><span>Profesor, horario, aula y lo que se vio en cada clase.</span></div>
+          </li>
+          <li>
+            <span class="f-ico" style="--c: #ec4899"><span data-icon="folder"></span></span>
+            <div><strong>Materiales de apoyo</strong><span>Guías, presentaciones, lecturas y enlaces listos para descargar.</span></div>
+          </li>
+          <li>
+            <span class="f-ico" style="--c: #f97316"><span data-icon="calendar"></span></span>
+            <div><strong>Calendario de evaluaciones</strong><span>Exámenes, parciales y entregas con cuenta regresiva.</span></div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="login-panel">
+        <div class="mobile-brand">
+          <div class="brand-logo" data-brand-logo></div>
+          <h1 data-s="site_name">Portal académico</h1>
+          <p data-s="welcome_message"></p>
+        </div>
+
+        <div class="login-card">
+          <div class="login-card-head">
+            <h2>¡Hola! 👋</h2>
+            <p id="login-sub">Ingresa con tu cédula y tu correo.</p>
+          </div>
+
+          <div class="segmented" role="tablist">
+            <span class="seg-indicator"></span>
+            <button type="button" class="active" data-tab="student" role="tab" aria-selected="true"><span data-icon="cap"></span>Estudiante</button>
+            <button type="button" data-tab="admin" role="tab" aria-selected="false"><span data-icon="lock"></span>Administrador</button>
+          </div>
+
+          <form id="student-form" novalidate>
+            <div class="field">
+              <label for="cedula">Cédula</label>
+              <div class="input-icon">
+                <span data-icon="id"></span>
+                <input class="input" id="cedula" name="cedula" inputmode="numeric" autocomplete="username" placeholder="Ej: 12345678" required />
+              </div>
+            </div>
+            <div class="field">
+              <label for="email">Correo electrónico</label>
+              <div class="input-icon">
+                <span data-icon="mail"></span>
+                <input class="input" id="email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="tucorreo@ejemplo.com" required />
+              </div>
+            </div>
+            <div class="alert" data-error hidden></div>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">Ingresar <span data-icon="arrow-right"></span></button>
+            <p class="login-note" id="register-note">¿No puedes entrar? Pídele al administrador que te registre.</p>
+          </form>
+
+          <form id="admin-form" novalidate hidden>
+            <div class="field">
+              <label for="username">Usuario</label>
+              <div class="input-icon">
+                <span data-icon="user"></span>
+                <input class="input" id="username" name="username" autocomplete="username" placeholder="admin" required />
+              </div>
+            </div>
+            <div class="field">
+              <label for="password">Contraseña</label>
+              <div class="input-icon">
+                <span data-icon="key"></span>
+                <input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+                <button type="button" class="icon-btn sm plain input-action" id="toggle-pass" aria-label="Mostrar contraseña"></button>
+              </div>
+            </div>
+            <div class="alert" data-error hidden></div>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">Entrar al panel <span data-icon="arrow-right"></span></button>
+            <p class="login-note">Acceso exclusivo para quien administra el portal.</p>
+          </form>
+        </div>
+
+        <p class="login-foot">© <span id="year"></span> · <span data-s="site_name"></span></p>
+      </section>
+    </div>
+
+    <script src="/js/common.js?v=__V__"></script>
+    <script src="/js/login.js?v=__V__"></script>
+  </body>
+</html>

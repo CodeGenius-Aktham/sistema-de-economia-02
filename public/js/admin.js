@@ -1,0 +1,1121 @@
+/* =========================================================================
+   Panel de administración
+   ========================================================================= */
+'use strict';
+
+const A = { auth: null, settings: null, semesters: [], subjects: [] };
+
+async function refreshRefs() {
+  [A.semesters, A.subjects] = await Promise.all([api('/semesters'), api('/subjects')]);
+}
+
+const semesterOptions = (empty) => [
+  ...(empty ? [{ value: '', label: empty }] : []),
+  ...A.semesters.map((s) => ({ value: s.id, label: s.name + (s.period ? ` (${s.period})` : '') })),
+];
+
+const subjectOptions = (empty) => [
+  ...(empty ? [{ value: '', label: empty }] : []),
+  ...A.subjects.map((s) => ({ value: s.id, label: s.name, group: s.semester_name })),
+];
+
+function adminSemester() {
+  const v = sessionStorage.getItem('admin-semester') || 'all';
+  return v === 'all' || A.semesters.some((s) => String(s.id) === v) ? v : 'all';
+}
+
+/* =========================================================================
+   Formularios
+   ========================================================================= */
+
+function semesterForm(sem) {
+  formModal({
+    title: sem ? 'Editar semestre' : 'Nuevo semestre',
+    fields: [
+      { name: 'name', label: 'Nombre', required: true, placeholder: 'Ej: Semestre I' },
+      { name: 'period', label: 'Período académico', placeholder: 'Ej: 2026-II' },
+      { name: 'number', label: 'Número', type: 'number', placeholder: '1', attrs: 'min="1" max="20"' },
+      { name: 'position', label: 'Orden en la lista', type: 'number', hint: 'Se ordenan de menor a mayor.' },
+      { name: 'description', label: 'Descripción (opcional)', type: 'textarea', rows: 3, full: true, placeholder: 'Ej: Ciclo básico, sección 02, turno mañana…' },
+    ],
+    values: sem || { position: A.semesters.length + 1, number: A.semesters.length + 1, period: A.settings.period || '' },
+    submitLabel: sem ? 'Guardar cambios' : 'Crear semestre',
+    onSubmit: async (v) => {
+      await api(sem ? `/admin/semesters/${sem.id}` : '/admin/semesters', { method: sem ? 'PUT' : 'POST', body: v });
+      toast(sem ? 'Semestre actualizado' : 'Semestre creado');
+      await refreshRefs();
+      Router.refresh();
+    },
+    onDelete: sem ? () => deleteSemester(sem) : null,
+  });
+}
+
+async function deleteSemester(sem) {
+  const ok = await confirmDialog({
+    title: 'Eliminar semestre',
+    message: `Se eliminará <strong>${esc(sem.name)}</strong> con sus ${sem.subject_count || 0} materia(s), clases, materiales y evaluaciones. Esta acción no se puede deshacer.`,
+  });
+  if (!ok) return false;
+  await api(`/admin/semesters/${sem.id}`, { method: 'DELETE' });
+  toast('Semestre eliminado');
+  await refreshRefs();
+  Router.refresh();
+  return true;
+}
+
+function subjectForm(sub, { semesterId } = {}) {
+  if (!A.semesters.length) {
+    toast('Primero crea un semestre', 'error');
+    location.hash = '#/semestres';
+    return;
+  }
+  formModal({
+    title: sub ? 'Editar materia' : 'Nueva materia',
+    size: 'lg',
+    fields: [
+      { name: 'name', label: 'Nombre de la materia', required: true, placeholder: 'Ej: Microeconomía I', full: true },
+      { name: 'semester_id', label: 'Semestre', type: 'select', required: true, options: semesterOptions() },
+      { name: 'code', label: 'Código', placeholder: 'Ej: ECO-201' },
+      { name: 'color', label: 'Color', type: 'color', full: true },
+      { name: 'professor', label: 'Profesor(a)', placeholder: 'Ej: Prof. Ana Rodríguez' },
+      { name: 'professor_email', label: 'Correo del profesor', type: 'email', placeholder: 'profesor@universidad.edu' },
+      { name: 'schedule', label: 'Horario', placeholder: 'Ej: Lun y Mié · 8:00 a 9:30 a. m.' },
+      { name: 'classroom', label: 'Aula / modalidad', placeholder: 'Ej: Aula 12 · Edificio B' },
+      { name: 'credits', label: 'Créditos (UC)', type: 'number', attrs: 'min="0" max="30"' },
+      { name: 'position', label: 'Orden', type: 'number', hint: 'Opcional. Menor número = aparece primero.' },
+      {
+        name: 'description',
+        label: 'Información de la materia',
+        type: 'textarea',
+        rows: 7,
+        full: true,
+        placeholder: 'Objetivos, contenido programático, bibliografía, forma de evaluación, grupo de WhatsApp…',
+        hint: 'Los enlaces (https://…) se convierten en botones clicables para los estudiantes.',
+      },
+    ],
+    values: sub || {
+      semester_id: semesterId || (adminSemester() !== 'all' ? adminSemester() : A.semesters[0]?.id),
+      color: SUBJECT_COLORS[A.subjects.length % SUBJECT_COLORS.length],
+    },
+    submitLabel: sub ? 'Guardar cambios' : 'Crear materia',
+    onSubmit: async (v) => {
+      const saved = await api(sub ? `/admin/subjects/${sub.id}` : '/admin/subjects', { method: sub ? 'PUT' : 'POST', body: v });
+      toast(sub ? 'Materia actualizada' : 'Materia creada');
+      await refreshRefs();
+      if (!sub) location.hash = `#/materias/${saved.id}`;
+      else Router.refresh();
+    },
+    onDelete: sub ? () => deleteSubject(sub) : null,
+  });
+}
+
+async function deleteSubject(sub, { goBack = false } = {}) {
+  const ok = await confirmDialog({
+    title: 'Eliminar materia',
+    message: `Se eliminará <strong>${esc(sub.name)}</strong> con todas sus clases, materiales y evaluaciones. Esta acción no se puede deshacer.`,
+  });
+  if (!ok) return false;
+  await api(`/admin/subjects/${sub.id}`, { method: 'DELETE' });
+  toast('Materia eliminada');
+  await refreshRefs();
+  if (goBack || location.hash.startsWith('#/materias/')) location.hash = '#/materias';
+  else Router.refresh();
+  return true;
+}
+
+function classForm(cls, subjectId, nextNumber = 1) {
+  formModal({
+    title: cls ? 'Editar clase' : 'Registrar clase',
+    size: 'lg',
+    fields: [
+      { name: 'title', label: 'Título / tema', required: true, placeholder: `Ej: Clase ${nextNumber}: Oferta y demanda`, full: true },
+      { name: 'date', label: 'Fecha', type: 'date' },
+      { name: 'subject_id', type: 'hidden' },
+      {
+        name: 'content',
+        label: 'Contenido de la clase',
+        type: 'textarea',
+        rows: 9,
+        full: true,
+        placeholder: 'Temas vistos, ejercicios, tareas asignadas, lecturas para la próxima clase…',
+        hint: 'Puedes adjuntar archivos a esta clase desde la pestaña “Materiales”.',
+      },
+    ],
+    values: cls || { subject_id: subjectId, date: todayISO() },
+    submitLabel: cls ? 'Guardar cambios' : 'Registrar clase',
+    onSubmit: async (v) => {
+      v.subject_id = subjectId;
+      await api(cls ? `/admin/classes/${cls.id}` : '/admin/classes', { method: cls ? 'PUT' : 'POST', body: v });
+      toast(cls ? 'Clase actualizada' : 'Clase registrada');
+      Router.refresh();
+    },
+    onDelete: cls ? () => deleteClass(cls) : null,
+  });
+}
+
+async function deleteClass(cls) {
+  const ok = await confirmDialog({
+    title: 'Eliminar clase',
+    message: `Se eliminará la clase <strong>${esc(cls.title)}</strong>. Los materiales adjuntos se conservan en la materia.`,
+  });
+  if (!ok) return false;
+  await api(`/admin/classes/${cls.id}`, { method: 'DELETE' });
+  toast('Clase eliminada');
+  Router.refresh();
+  return true;
+}
+
+function eventForm(ev, { date, subjectId } = {}) {
+  formModal({
+    title: ev ? 'Editar evaluación' : 'Programar evaluación',
+    size: 'lg',
+    fields: [
+      { name: 'title', label: 'Título', required: true, placeholder: 'Ej: Primer parcial', full: true },
+      { name: 'type', label: 'Tipo', type: 'select', options: Object.entries(EVENT_TYPES).map(([k, t]) => ({ value: k, label: t.label })) },
+      { name: 'subject_id', label: 'Materia', type: 'select', options: subjectOptions('General (sin materia)') },
+      { name: 'date', label: 'Fecha', type: 'date', required: true },
+      { name: 'location', label: 'Lugar', placeholder: 'Ej: Aula 12 o “En línea”' },
+      { name: 'start_time', label: 'Hora de inicio', type: 'time' },
+      { name: 'end_time', label: 'Hora de fin', type: 'time' },
+      {
+        name: 'description',
+        label: 'Detalles',
+        type: 'textarea',
+        rows: 4,
+        full: true,
+        placeholder: 'Temas que entran, porcentaje de la nota, materiales permitidos…',
+      },
+    ],
+    values: ev || { type: 'examen', date: date || todayISO(), subject_id: subjectId || '' },
+    submitLabel: ev ? 'Guardar cambios' : 'Programar',
+    onSubmit: async (v) => {
+      await api(ev ? `/admin/events/${ev.id}` : '/admin/events', { method: ev ? 'PUT' : 'POST', body: v });
+      toast(ev ? 'Evaluación actualizada' : 'Evaluación programada');
+      Router.refresh();
+    },
+    onDelete: ev ? () => deleteEvent(ev) : null,
+  });
+}
+
+async function deleteEvent(ev) {
+  const ok = await confirmDialog({ title: 'Eliminar evaluación', message: `Se eliminará <strong>${esc(ev.title)}</strong> del calendario.` });
+  if (!ok) return false;
+  await api(`/admin/events/${ev.id}`, { method: 'DELETE' });
+  toast('Evaluación eliminada');
+  Router.refresh();
+  return true;
+}
+
+function openEvent(ev) {
+  showEventDetail(ev, { onEdit: (e) => eventForm(e), onDelete: (e) => deleteEvent(e) });
+}
+
+/* ----- materiales ----- */
+
+async function classOptionsFor(subjectId) {
+  if (!subjectId) return [{ value: '', label: 'Sin clase específica' }];
+  const s = await api(`/subjects/${subjectId}`);
+  return [{ value: '', label: 'Sin clase específica' }, ...s.classes.map((c, i) => ({ value: c.id, label: `Clase ${i + 1}: ${c.title}` }))];
+}
+
+async function wireClassSelect(form, classId) {
+  const subjectSel = form.querySelector('[name=subject_id]');
+  const classSel = form.querySelector('[name=class_id]');
+  const update = async (keep) => {
+    classSel.disabled = true;
+    try {
+      const opts = await classOptionsFor(subjectSel.value);
+      classSel.innerHTML = optionsHtml(opts, keep || '');
+    } finally {
+      classSel.disabled = false;
+    }
+  };
+  subjectSel.addEventListener('change', () => update(''));
+  await update(classId);
+}
+
+function uploadModal({ subjectId, classId } = {}) {
+  if (!A.subjects.length) {
+    toast('Primero crea una materia', 'error');
+    return;
+  }
+  const sid = subjectId || A.subjects[0].id;
+  const m = openModal({
+    title: 'Subir material de apoyo',
+    size: 'lg',
+    raw: `<form novalidate>
+      <div class="modal-head"><h3>Subir material de apoyo</h3><button type="button" class="icon-btn sm plain" data-close aria-label="Cerrar">${icon('x')}</button></div>
+      <div class="modal-body">
+        <div class="alert" data-error hidden></div>
+        <div class="form-grid">
+          <div class="field"><label>Materia *</label><select class="select" name="subject_id">${optionsHtml(subjectOptions(), sid)}</select></div>
+          <div class="field"><label>Clase (opcional)</label><select class="select" name="class_id"><option value="">Cargando…</option></select></div>
+        </div>
+        <div class="segmented" data-kind>
+          <span class="seg-indicator"></span>
+          <button type="button" class="active" data-k="file">${icon('upload')} Archivos</button>
+          <button type="button" data-k="link">${icon('link')} Enlace</button>
+        </div>
+        <div data-file-zone class="stack-sm">
+          <label class="dropzone" data-dropzone>
+            <input type="file" multiple hidden data-files>
+            <span class="dz-icon">${icon('cloud-upload')}</span>
+            <strong>Arrastra los archivos aquí o toca para elegir</strong>
+            <span class="small">PDF, Word, PowerPoint, Excel, imágenes, videos… Puedes elegir varios a la vez.</span>
+          </label>
+          <div class="file-list" data-file-list></div>
+        </div>
+        <div data-link-zone hidden class="field">
+          <label>Enlace *</label>
+          <div class="input-icon">${icon('link')}<input class="input" name="url" type="url" placeholder="https://drive.google.com/… o https://youtube.com/…"></div>
+          <span class="hint">Ideal para videos de YouTube, carpetas de Drive, artículos o simuladores.</span>
+        </div>
+        <div class="form-grid">
+          <div class="field full"><label>Título</label><input class="input" name="title" placeholder="Si lo dejas vacío se usa el nombre del archivo"></div>
+          <div class="field full"><label>Descripción (opcional)</label><textarea class="textarea" name="description" rows="3" placeholder="Ej: Guía de ejercicios para el primer parcial"></textarea></div>
+        </div>
+        <div data-progress hidden>
+          <div class="row small muted" style="justify-content:space-between"><span>Subiendo…</span><span data-pct>0%</span></div>
+          <div style="height:8px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:6px"><div data-bar style="height:100%;width:0;background:var(--grad);transition:width .2s"></div></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary">${icon('upload')} Subir</button>
+      </div>
+    </form>`,
+  });
+
+  const form = m.el.querySelector('form');
+  const err = form.querySelector('[data-error]');
+  const input = form.querySelector('[data-files]');
+  const list = form.querySelector('[data-file-list]');
+  const dz = form.querySelector('[data-dropzone]');
+  let files = [];
+  let kind = 'file';
+  wireClassSelect(form, classId);
+
+  const seg = form.querySelector('[data-kind]');
+  const ind = seg.querySelector('.seg-indicator');
+  const moveInd = () => {
+    const a = seg.querySelector('button.active');
+    ind.style.width = `${a.offsetWidth}px`;
+    ind.style.transform = `translateX(${a.offsetLeft - 5}px)`;
+  };
+  requestAnimationFrame(moveInd);
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-k]');
+    if (!b) return;
+    kind = b.dataset.k;
+    seg.querySelectorAll('[data-k]').forEach((x) => x.classList.toggle('active', x === b));
+    form.querySelector('[data-file-zone]').hidden = kind !== 'file';
+    form.querySelector('[data-link-zone]').hidden = kind !== 'link';
+    form.querySelector('[name=title]').placeholder = kind === 'file' ? 'Si lo dejas vacío se usa el nombre del archivo' : 'Ej: Video explicativo de elasticidad';
+    moveInd();
+  });
+
+  const drawFiles = () => {
+    list.innerHTML = files
+      .map((f, i) => {
+        const k = fileKind({ kind: 'file', original_name: f.name });
+        return `<div class="file-chip" style="--c:${k.color}"><span style="color:${k.color}">${icon(k.icon)}</span><span class="name">${esc(f.name)}</span><span class="muted">${fmtSize(f.size)}</span><button type="button" class="icon-btn sm plain" data-rm="${i}" aria-label="Quitar">${icon('x')}</button></div>`;
+      })
+      .join('');
+  };
+  const addFiles = (fl) => {
+    files = files.concat([...fl]).slice(0, 20);
+    drawFiles();
+  };
+  input.addEventListener('change', () => {
+    addFiles(input.files);
+    input.value = '';
+  });
+  list.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-rm]');
+    if (!b) return;
+    files.splice(Number(b.dataset.rm), 1);
+    drawFiles();
+  });
+  ['dragenter', 'dragover'].forEach((t) =>
+    dz.addEventListener(t, (e) => {
+      e.preventDefault();
+      dz.classList.add('drag');
+    })
+  );
+  ['dragleave', 'drop'].forEach((t) => dz.addEventListener(t, () => dz.classList.remove('drag')));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const fd = new FormData();
+    fd.append('subject_id', form.subject_id.value);
+    fd.append('class_id', form.class_id.value);
+    fd.append('title', form.title.value);
+    fd.append('description', form.description.value);
+    fd.append('kind', kind);
+    if (kind === 'file') {
+      if (!files.length) {
+        err.innerHTML = `${icon('alert')}<span>Selecciona al menos un archivo</span>`;
+        err.hidden = false;
+        return;
+      }
+      files.forEach((f) => fd.append('files', f, f.name));
+    } else {
+      if (!form.url.value.trim()) {
+        err.innerHTML = `${icon('alert')}<span>Escribe el enlace</span>`;
+        err.hidden = false;
+        return;
+      }
+      fd.append('url', form.url.value.trim());
+    }
+    const btn = form.querySelector('[type=submit]');
+    const prog = form.querySelector('[data-progress]');
+    setBusy(btn, true, 'Subiendo…');
+    prog.hidden = kind !== 'file';
+    try {
+      const created = await apiUpload('/admin/materials', fd, {
+        onProgress: (p) => {
+          form.querySelector('[data-bar]').style.width = `${Math.round(p * 100)}%`;
+          form.querySelector('[data-pct]').textContent = `${Math.round(p * 100)}%`;
+        },
+      });
+      toast(created.length > 1 ? `${created.length} materiales subidos` : 'Material publicado');
+      m.close();
+      Router.refresh();
+    } catch (ex) {
+      err.innerHTML = `${icon('alert')}<span>${esc(ex.message)}</span>`;
+      err.hidden = false;
+      prog.hidden = true;
+      setBusy(btn, false);
+    }
+  });
+}
+
+function materialEditForm(mat) {
+  const fields = [
+    { name: 'title', label: 'Título', required: true, full: true },
+    { name: 'subject_id', label: 'Materia', type: 'select', options: subjectOptions() },
+    { name: 'class_id', label: 'Clase', type: 'select', options: [{ value: '', label: 'Cargando…' }] },
+    ...(mat.kind === 'link' ? [{ name: 'url', label: 'Enlace', type: 'url', required: true, full: true }] : []),
+    { name: 'description', label: 'Descripción', type: 'textarea', rows: 3, full: true },
+  ];
+  formModal({
+    title: 'Editar material',
+    fields,
+    values: mat,
+    intro: mat.kind === 'file' ? `<div class="alert info">${icon('file')}<span>Archivo: <strong>${esc(mat.original_name || '')}</strong> (${fmtSize(mat.size)}). Para reemplazarlo, elimina este material y sube el nuevo.</span></div>` : '',
+    onMount: (form) => wireClassSelect(form, mat.class_id),
+    onSubmit: async (v) => {
+      await api(`/admin/materials/${mat.id}`, { method: 'PUT', body: v });
+      toast('Material actualizado');
+      Router.refresh();
+    },
+    onDelete: () => deleteMaterial(mat),
+  });
+}
+
+async function deleteMaterial(mat) {
+  const ok = await confirmDialog({ title: 'Eliminar material', message: `Se eliminará <strong>${esc(mat.title)}</strong>. Los estudiantes ya no podrán descargarlo.` });
+  if (!ok) return false;
+  await api(`/admin/materials/${mat.id}`, { method: 'DELETE' });
+  toast('Material eliminado');
+  Router.refresh();
+  return true;
+}
+
+function bindMaterialActions(root, materials) {
+  root.addEventListener('click', (e) => {
+    const ed = e.target.closest('[data-edit-material]');
+    const del = e.target.closest('[data-delete-material]');
+    const list = typeof materials === 'function' ? materials() : materials;
+    const find = (id) => list.find((m) => String(m.id) === id);
+    if (ed) materialEditForm(find(ed.dataset.editMaterial));
+    if (del) deleteMaterial(find(del.dataset.deleteMaterial)).catch((ex) => toast(ex.message, 'error'));
+  });
+}
+
+function bindEventItems(root, events) {
+  root.addEventListener('click', (e) => {
+    const el = e.target.closest('.event[data-event-id]');
+    if (!el) return;
+    const ev = events.find((x) => String(x.id) === el.dataset.eventId);
+    if (ev) openEvent(ev);
+  });
+}
+
+/* ----- estudiantes ----- */
+
+function studentForm(st) {
+  formModal({
+    title: st ? 'Editar estudiante' : 'Agregar estudiante',
+    fields: [
+      { name: 'cedula', label: 'Cédula', required: true, placeholder: 'Ej: 12345678', attrs: 'inputmode="numeric"' },
+      { name: 'email', label: 'Correo', type: 'email', required: true, placeholder: 'estudiante@correo.com' },
+      { name: 'name', label: 'Nombre y apellido', placeholder: 'Ej: María Pérez', full: true },
+      { name: 'semester_id', label: 'Semestre', type: 'select', options: semesterOptions('Sin definir'), full: true },
+      { name: 'active', type: 'toggle', toggleLabel: 'Acceso activo (puede ingresar al portal)', full: true },
+    ],
+    values: st || { active: true, semester_id: adminSemester() !== 'all' ? adminSemester() : '' },
+    submitLabel: st ? 'Guardar cambios' : 'Agregar',
+    onSubmit: async (v) => {
+      await api(st ? `/admin/students/${st.id}` : '/admin/students', { method: st ? 'PUT' : 'POST', body: v });
+      toast(st ? 'Estudiante actualizado' : 'Estudiante agregado');
+      Router.refresh();
+    },
+    onDelete: st ? () => deleteStudent(st) : null,
+  });
+}
+
+async function deleteStudent(st) {
+  const ok = await confirmDialog({ title: 'Eliminar estudiante', message: `<strong>${esc(st.name || st.cedula)}</strong> ya no podrá ingresar al portal.` });
+  if (!ok) return false;
+  await api(`/admin/students/${st.id}`, { method: 'DELETE' });
+  toast('Estudiante eliminado');
+  Router.refresh();
+  return true;
+}
+
+function importForm() {
+  formModal({
+    title: 'Importar lista de estudiantes',
+    size: 'lg',
+    intro: `<div class="alert info">${icon('info')}<span>Pega una línea por estudiante con <strong>cédula, correo y nombre</strong> separados por coma, punto y coma o tabulación (puedes copiar y pegar directo desde Excel o Google Sheets). Si la cédula ya existe, se actualizan sus datos.</span></div>`,
+    fields: [
+      {
+        name: 'text',
+        label: 'Lista',
+        type: 'textarea',
+        rows: 10,
+        required: true,
+        full: true,
+        placeholder: '12345678, maria.perez@correo.com, María Pérez\n23456789; jose.gomez@correo.com; José Gómez',
+      },
+      { name: 'semester_id', label: 'Asignar al semestre', type: 'select', options: semesterOptions('No cambiar / sin definir'), full: true },
+    ],
+    submitLabel: 'Importar',
+    onSubmit: async (v) => {
+      const r = await api('/admin/students/import', { method: 'POST', body: v });
+      toast(`${r.created} agregados · ${r.updated} actualizados`);
+      Router.refresh();
+      if (r.errors.length) {
+        openModal({
+          title: `${r.errors.length} línea(s) no se pudieron importar`,
+          body: `<div class="list">${r.errors
+            .map((e) => `<div class="admin-row"><span class="badge neutral">Línea ${e.line}</span><div class="info"><strong>${esc(e.text)}</strong><span>${esc(e.reason)}</span></div></div>`)
+            .join('')}</div>`,
+          footer: `<button class="btn btn-primary" data-close>Entendido</button>`,
+        });
+      }
+    },
+  });
+}
+
+/* =========================================================================
+   Páginas
+   ========================================================================= */
+
+async function pageOverview(ctx) {
+  Shell.setTitle('Resumen', 'Panel de administración');
+  ctx.render(skeleton());
+  const st = await api('/admin/stats', { query: { today: todayISO() } });
+  if (!ctx.alive()) return;
+
+  const steps = [
+    ['Crea los semestres', st.semesters > 0, '#/semestres'],
+    ['Agrega las materias', st.subjects > 0, '#/materias'],
+    ['Sube materiales y programa evaluaciones', st.materials > 0 || st.upcoming > 0, '#/materiales'],
+    ['Registra a los estudiantes', st.students > 0 || A.settings.allow_self_register === '1', '#/estudiantes'],
+  ];
+  const pending = steps.filter((s) => !s[1]).length;
+  const name = firstName(A.auth.user.name) || A.auth.user.username;
+
+  ctx.render(`
+    ${
+      st.must_change_password
+        ? `<div class="alert warn">${icon('alert')}<span>Estás usando la contraseña inicial del administrador. <a href="#/ajustes"><strong>Cámbiala ahora</strong></a> para proteger el portal.</span></div>`
+        : ''
+    }
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <span class="eyebrow">${icon('sparkles')}Panel de administración</span>
+          <h2>¡Hola, ${esc(name)}!</h2>
+          <p>Desde aquí gestionas las materias, los materiales de apoyo, el calendario de evaluaciones y quién puede entrar al portal.</p>
+        </div>
+        <div class="hero-next">
+          ${
+            pending
+              ? `<div class="lbl">Primeros pasos · ${steps.length - pending}/${steps.length}</div>
+                 <div class="stack-sm" style="margin-top:12px">${steps
+                   .map(
+                     ([t, done, href]) =>
+                       `<a href="${href}" class="row" style="color:#fff;text-decoration:none;gap:10px"><span style="display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:${done ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.2)'};color:${done ? '#5b4cf0' : '#fff'}">${icon(done ? 'check' : 'right')}</span><span style="${done ? 'opacity:.75;text-decoration:line-through' : 'font-weight:650'}">${t}</span></a>`
+                   )
+                   .join('')}</div>`
+              : `<div class="lbl">Todo listo</div><h3>Tu portal está funcionando</h3><div class="sub">${st.active_students} estudiante(s) con acceso · ${fmtSize(st.storage_bytes)} en archivos</div>`
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="stats admin-stats" style="--cols:4">
+      <a class="stat" href="#/materias" style="--c:#6366f1"><span class="s-ico">${icon('book')}</span><div><b>${st.subjects}</b><span>Materias</span></div></a>
+      <a class="stat" href="#/materiales" style="--c:#ec4899"><span class="s-ico">${icon('folder')}</span><div><b>${st.materials}</b><span>Materiales</span></div></a>
+      <a class="stat" href="#/calendario" style="--c:#f97316"><span class="s-ico">${icon('calendar')}</span><div><b>${st.upcoming}</b><span>Evaluaciones próximas</span></div></a>
+      <a class="stat" href="#/estudiantes" style="--c:#10b981"><span class="s-ico">${icon('users')}</span><div><b>${st.students}</b><span>Estudiantes</span></div></a>
+    </section>
+
+    <section class="quick-actions">
+      <button class="quick" style="--c:#f97316" data-quick="event"><span class="q-ico">${icon('calendar-plus')}</span><strong>Programar evaluación</strong><span>Examen, parcial, quiz o entrega</span></button>
+      <button class="quick" style="--c:#ec4899" data-quick="upload"><span class="q-ico">${icon('cloud-upload')}</span><strong>Subir material</strong><span>Archivos o enlaces de apoyo</span></button>
+      <button class="quick" style="--c:#6366f1" data-quick="subject"><span class="q-ico">${icon('book')}</span><strong>Nueva materia</strong><span>Profesor, horario e información</span></button>
+      <button class="quick" style="--c:#10b981" data-quick="students"><span class="q-ico">${icon('user-plus')}</span><strong>Agregar estudiantes</strong><span>Uno a uno o pegando una lista</span></button>
+    </section>
+
+    <section class="grid-main">
+      <div class="card">
+        <div class="card-head"><h3><span class="h-ico">${icon('calendar')}</span>Próximas evaluaciones</h3><a class="btn btn-ghost btn-sm" href="#/calendario">Calendario ${icon('arrow-right')}</a></div>
+        <div class="card-body" data-events>
+          ${st.upcoming_events.length ? `<div class="list">${st.upcoming_events.map((e) => eventItem(e)).join('')}</div>` : emptyState({ icon: 'calendar', title: 'Sin evaluaciones próximas', text: 'Programa la primera para que los estudiantes la vean en su calendario.', small: true })}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3><span class="h-ico">${icon('folder')}</span>Materiales recientes</h3><a class="btn btn-ghost btn-sm" href="#/materiales">Todos ${icon('arrow-right')}</a></div>
+        <div class="card-body" data-materials>
+          ${st.recent_materials.length ? `<div class="list">${st.recent_materials.map((m) => materialItem(m, { admin: true, showSubject: true, showClass: false })).join('')}</div>` : emptyState({ icon: 'folder', title: 'Aún no hay materiales', text: 'Sube guías, presentaciones o enlaces para cada materia.', small: true })}
+        </div>
+      </div>
+    </section>
+  `);
+
+  const view = document.getElementById('view');
+  bindEventItems(view.querySelector('[data-events]'), st.upcoming_events);
+  bindMaterialActions(view.querySelector('[data-materials]'), st.recent_materials);
+  view.querySelector('.quick-actions').addEventListener('click', (e) => {
+    const q = e.target.closest('[data-quick]')?.dataset.quick;
+    if (q === 'event') eventForm(null);
+    if (q === 'upload') uploadModal();
+    if (q === 'subject') subjectForm(null);
+    if (q === 'students') location.hash = '#/estudiantes';
+  });
+}
+
+async function pageSemesters(ctx) {
+  Shell.setTitle('Semestres', 'Organiza las materias por semestre');
+  await refreshRefs();
+  if (!ctx.alive()) return;
+
+  ctx.render(`
+    <div class="section-title">
+      <div><h2>${A.semesters.length} semestre${A.semesters.length === 1 ? '' : 's'}</h2><p>Cada materia pertenece a un semestre.</p></div>
+      <button class="btn btn-primary" data-add>${icon('plus')} Nuevo semestre</button>
+    </div>
+    ${
+      A.semesters.length
+        ? `<div class="list">${A.semesters
+            .map(
+              (s, i) => `<div class="admin-row">
+                <div class="color-tile" style="--c:${SUBJECT_COLORS[i % SUBJECT_COLORS.length]}">${s.number || i + 1}</div>
+                <div class="info"><strong>${esc(s.name)}</strong><span>${[s.period, `${s.subject_count} materia${s.subject_count === 1 ? '' : 's'}`, s.description].filter(Boolean).map(esc).join(' · ')}</span></div>
+                <button class="btn btn-soft btn-sm hide-mobile" data-open="${s.id}">${icon('book')} Materias</button>
+                <button class="icon-btn sm plain" data-edit="${s.id}" aria-label="Editar">${icon('edit')}</button>
+                <button class="icon-btn sm plain danger" data-del="${s.id}" aria-label="Eliminar">${icon('trash')}</button>
+              </div>`
+            )
+            .join('')}</div>`
+        : `<div class="card">${emptyState({ icon: 'layers', title: 'Crea tu primer semestre', text: 'Por ejemplo “Semestre I”, “Semestre II”… Luego podrás agregar sus materias.', action: `<button class="btn btn-primary" data-add>${icon('plus')} Nuevo semestre</button>` })}</div>`
+    }
+  `);
+
+  const view = document.getElementById('view');
+  view.addEventListener('click', (e) => {
+    const find = (id) => A.semesters.find((s) => String(s.id) === id);
+    const t = e.target.closest('[data-add],[data-edit],[data-del],[data-open]');
+    if (!t) return;
+    if ('add' in t.dataset) semesterForm(null);
+    else if (t.dataset.edit) semesterForm(find(t.dataset.edit));
+    else if (t.dataset.del) deleteSemester(find(t.dataset.del)).catch((ex) => toast(ex.message, 'error'));
+    else if (t.dataset.open) {
+      sessionStorage.setItem('admin-semester', t.dataset.open);
+      location.hash = '#/materias';
+    }
+  });
+}
+
+async function pageSubjectsAdmin(ctx) {
+  Shell.setTitle('Materias', 'Información, clases, materiales y evaluaciones');
+  ctx.render(skeleton([['60%', '40px'], ['100%', '300px']]));
+  await refreshRefs();
+  if (!ctx.alive()) return;
+
+  if (!A.semesters.length) {
+    return ctx.render(`<div class="card">${emptyState({ icon: 'layers', title: 'Primero crea un semestre', text: 'Las materias se organizan por semestre.', action: `<a class="btn btn-primary" href="#/semestres">${icon('plus')} Crear semestre</a>` })}</div>`);
+  }
+
+  let current = adminSemester();
+  let q = '';
+  ctx.render(`
+    <section class="stack-sm">
+      <div class="chips">
+        <button class="chip ${current === 'all' ? 'active' : ''}" data-sem="all">${icon('layers')}Todos</button>
+        ${A.semesters.map((s) => `<button class="chip ${current === String(s.id) ? 'active' : ''}" data-sem="${s.id}">${esc(s.name)}</button>`).join('')}
+      </div>
+      <div class="toolbar">
+        <div class="input-icon search">${icon('search')}<input class="input" type="search" placeholder="Buscar materia…" data-search></div>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" data-add>${icon('plus')} Nueva materia</button>
+      </div>
+    </section>
+    <section data-list></section>
+  `);
+
+  const view = document.getElementById('view');
+  const draw = () => {
+    const term = q.trim().toLowerCase();
+    const list = A.subjects.filter(
+      (s) => (current === 'all' || String(s.semester_id) === current) && (!term || [s.name, s.professor, s.code].some((v) => (v || '').toLowerCase().includes(term)))
+    );
+    view.querySelector('[data-list]').innerHTML = list.length
+      ? `<div class="list">${list
+          .map(
+            (s) => `<div class="admin-row" style="cursor:pointer" data-open="${s.id}">
+              <div class="color-tile" style="--c:${s.color || '#6366f1'}">${esc(initials(s.name))}</div>
+              <div class="info"><strong>${esc(s.name)}</strong><span>${[s.semester_name, s.professor, s.schedule].filter(Boolean).map(esc).join(' · ')}</span></div>
+              <span class="badge neutral hide-mobile">${icon('book')}${s.class_count} clases</span>
+              <span class="badge neutral hide-mobile">${icon('folder')}${s.material_count} materiales</span>
+              <button class="icon-btn sm plain" data-edit="${s.id}" aria-label="Editar">${icon('edit')}</button>
+              <button class="icon-btn sm plain danger" data-del="${s.id}" aria-label="Eliminar">${icon('trash')}</button>
+              <span class="muted">${icon('right')}</span>
+            </div>`
+          )
+          .join('')}</div>`
+      : `<div class="card">${emptyState({ icon: 'book', title: term ? 'Sin resultados' : 'No hay materias aquí todavía', text: term ? 'Prueba con otro nombre.' : 'Agrega la primera materia de este semestre.', action: term ? '' : `<button class="btn btn-primary" data-add>${icon('plus')} Nueva materia</button>` })}</div>`;
+  };
+
+  view.addEventListener('click', (e) => {
+    const find = (id) => A.subjects.find((s) => String(s.id) === id);
+    const sem = e.target.closest('[data-sem]');
+    if (sem) {
+      current = sem.dataset.sem;
+      sessionStorage.setItem('admin-semester', current);
+      view.querySelectorAll('[data-sem]').forEach((x) => x.classList.toggle('active', x === sem));
+      return draw();
+    }
+    const t = e.target.closest('[data-add],[data-edit],[data-del],[data-open]');
+    if (!t) return;
+    if ('add' in t.dataset) subjectForm(null, { semesterId: current !== 'all' ? current : undefined });
+    else if (t.dataset.edit) subjectForm(find(t.dataset.edit));
+    else if (t.dataset.del) deleteSubject(find(t.dataset.del)).catch((ex) => toast(ex.message, 'error'));
+    else if (t.dataset.open) location.hash = `#/materias/${t.dataset.open}`;
+  });
+  view.querySelector('[data-search]').addEventListener('input', (e) => {
+    q = e.target.value;
+    draw();
+  });
+  draw();
+}
+
+async function pageSubjectAdmin(ctx) {
+  ctx.render(skeleton([['100%', '240px'], ['50%', '44px'], ['100%', '300px']]));
+  const [s] = await Promise.all([api(`/subjects/${encodeURIComponent(ctx.params.id)}`), A.subjects.length ? null : refreshRefs()]);
+  if (!ctx.alive()) return;
+  Shell.setTitle(s.name, `${s.semester_name} · Gestión de la materia`);
+
+  const tabs = [
+    ['clases', 'Clases', 'book', s.classes.length],
+    ['materiales', 'Materiales', 'folder', s.materials.length],
+    ['evaluaciones', 'Evaluaciones', 'calendar', s.events.length],
+  ];
+  let tab = sessionStorage.getItem('admin-subject-tab') || 'clases';
+
+  ctx.render(`
+    ${subjectHero(s, {
+      actions: `<a class="btn btn-ghost btn-sm" style="background:rgba(255,255,255,.18);color:#fff;border-color:transparent" href="/app#/materias/${s.id}" target="_blank" rel="noopener">${icon('eye')}<span class="hide-mobile">Ver como estudiante</span></a>
+                <button class="btn btn-sm" style="background:#fff;color:#1e1b4b" data-edit-subject>${icon('edit')} Editar información</button>`,
+    })}
+    <section class="card card-pad">
+      <div class="row" style="margin-bottom:10px"><h3 style="font-size:16px;display:flex;gap:8px;align-items:center;flex:1">${icon('info')} Información de la materia</h3><button class="btn btn-ghost btn-sm" data-edit-subject>${icon('edit')} Editar</button></div>
+      ${s.description ? `<div class="rich">${linkify(s.description)}</div>` : `<p class="muted">Aún no has escrito información general. Agrega el programa, objetivos, bibliografía o forma de evaluación para que los estudiantes la vean.</p>`}
+    </section>
+    <section class="stack-sm">
+      <div class="row wrap">
+        <div class="tabs" role="tablist" style="max-width:100%">
+          ${tabs.map(([k, l, ic, n]) => `<button class="tab ${k === tab ? 'active' : ''}" data-tab="${k}">${icon(ic)}${l}<span class="count">${n}</span></button>`).join('')}
+        </div>
+        <span class="spacer"></span>
+        <button class="btn btn-primary" data-add></button>
+      </div>
+      <div data-panel></div>
+    </section>
+  `);
+
+  const view = document.getElementById('view');
+  const panel = view.querySelector('[data-panel]');
+  const addBtn = view.querySelector('[data-add]');
+  const draw = () => {
+    addBtn.innerHTML =
+      tab === 'clases' ? `${icon('plus')} Registrar clase` : tab === 'materiales' ? `${icon('upload')} Subir material` : `${icon('calendar-plus')} Programar evaluación`;
+    if (tab === 'clases') {
+      panel.innerHTML =
+        classTimeline(s, { admin: true }) ||
+        `<div class="card">${emptyState({ icon: 'book', title: 'Sin clases registradas', text: 'Registra cada clase con su tema y contenido. Luego podrás adjuntarle materiales.', action: `<button class="btn btn-primary" data-add-inline>${icon('plus')} Registrar clase</button>` })}</div>`;
+    } else if (tab === 'materiales') {
+      panel.innerHTML = s.materials.length
+        ? `<div class="list">${s.materials.map((m) => materialItem(m, { admin: true })).join('')}</div>`
+        : `<div class="card">${emptyState({ icon: 'folder', title: 'Sin materiales', text: 'Sube guías, lecturas, presentaciones o enlaces para esta materia.', action: `<button class="btn btn-primary" data-add-inline>${icon('upload')} Subir material</button>` })}</div>`;
+    } else {
+      panel.innerHTML = s.events.length
+        ? `<div class="list">${s.events.map((e) => eventItem(e, { showSubject: false })).join('')}</div>`
+        : `<div class="card">${emptyState({ icon: 'calendar', title: 'Sin evaluaciones', text: 'Programa exámenes, parciales o entregas de esta materia.', action: `<button class="btn btn-primary" data-add-inline>${icon('calendar-plus')} Programar evaluación</button>` })}</div>`;
+    }
+  };
+  const add = () => {
+    if (tab === 'clases') classForm(null, s.id, s.classes.length + 1);
+    else if (tab === 'materiales') uploadModal({ subjectId: s.id });
+    else eventForm(null, { subjectId: s.id });
+  };
+
+  view.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-tab]');
+    if (t) {
+      tab = t.dataset.tab;
+      sessionStorage.setItem('admin-subject-tab', tab);
+      view.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('active', x === t));
+      return draw();
+    }
+    if (e.target.closest('[data-add],[data-add-inline]')) return add();
+    if (e.target.closest('[data-edit-subject]')) return subjectForm(s);
+    const ec = e.target.closest('[data-edit-class]');
+    if (ec) return classForm(s.classes.find((c) => String(c.id) === ec.dataset.editClass), s.id);
+    const dc = e.target.closest('[data-delete-class]');
+    if (dc) return deleteClass(s.classes.find((c) => String(c.id) === dc.dataset.deleteClass)).catch((ex) => toast(ex.message, 'error'));
+  });
+  bindMaterialActions(panel, s.materials);
+  bindEventItems(panel, s.events);
+  draw();
+}
+
+async function pageCalendarAdmin(ctx) {
+  Shell.setTitle('Calendario', 'Programa exámenes, parciales y entregas');
+  await refreshRefs();
+  if (!ctx.alive()) return;
+  let current = adminSemester();
+
+  ctx.render(`
+    <section class="row wrap">
+      <div class="chips" style="flex:1;min-width:0">
+        <button class="chip ${current === 'all' ? 'active' : ''}" data-sem="all">${icon('layers')}Todos</button>
+        ${A.semesters.map((s) => `<button class="chip ${current === String(s.id) ? 'active' : ''}" data-sem="${s.id}">${esc(s.name)}</button>`).join('')}
+      </div>
+      <button class="btn btn-primary" data-new>${icon('calendar-plus')} Programar evaluación</button>
+    </section>
+    <section data-calendar></section>
+  `);
+
+  const cal = new CalendarView(document.querySelector('[data-calendar]'), {
+    load: (from, to) => api('/events', { query: { from, to, semester_id: current === 'all' ? '' : current } }),
+    onEvent: openEvent,
+    agendaActions: (date) => `<button class="btn btn-soft btn-block" data-add-date="${date}">${icon('plus')} Agregar en esta fecha</button>`,
+  });
+  const view = document.getElementById('view');
+  view.addEventListener('click', (e) => {
+    const sem = e.target.closest('[data-sem]');
+    if (sem) {
+      current = sem.dataset.sem;
+      sessionStorage.setItem('admin-semester', current);
+      view.querySelectorAll('[data-sem]').forEach((x) => x.classList.toggle('active', x === sem));
+      return cal.reload();
+    }
+    if (e.target.closest('[data-new]')) return eventForm(null, { date: cal.selected });
+    const ad = e.target.closest('[data-add-date]');
+    if (ad) eventForm(null, { date: ad.dataset.addDate });
+  });
+  await cal.reload();
+}
+
+async function pageMaterialsAdmin(ctx) {
+  Shell.setTitle('Materiales', 'Archivos y enlaces de apoyo');
+  ctx.render(skeleton([['100%', '50px'], ['100%', '400px']]));
+  await refreshRefs();
+  if (!ctx.alive()) return;
+
+  let subjectId = sessionStorage.getItem('admin-material-subject') || '';
+  if (subjectId && !A.subjects.some((s) => String(s.id) === subjectId)) subjectId = '';
+  let q = '';
+  let materials = [];
+
+  ctx.render(`
+    <section class="toolbar">
+      <select class="select" style="max-width:280px" data-subject>${optionsHtml(subjectOptions('Todas las materias'), subjectId)}</select>
+      <div class="input-icon search">${icon('search')}<input class="input" type="search" placeholder="Buscar material…" data-search></div>
+      <span class="spacer"></span>
+      <button class="btn btn-primary" data-upload>${icon('upload')} Subir material</button>
+    </section>
+    <section data-list></section>
+  `);
+  const view = document.getElementById('view');
+  const listEl = view.querySelector('[data-list]');
+  bindMaterialActions(listEl, () => materials);
+
+  let timer;
+  const load = async () => {
+    materials = await api('/materials', { query: { subject_id: subjectId, q } });
+    if (!ctx.alive()) return;
+    listEl.innerHTML = materials.length
+      ? `<p class="muted small" style="margin-bottom:10px">${materials.length} material${materials.length === 1 ? '' : 'es'}</p><div class="list">${materials.map((m) => materialItem(m, { admin: true, showSubject: true })).join('')}</div>`
+      : `<div class="card">${emptyState({ icon: 'folder', title: q ? 'Sin resultados' : 'Aún no hay materiales', text: q ? 'Prueba con otra palabra.' : 'Sube el primer archivo o enlace de apoyo.', action: q ? '' : `<button class="btn btn-primary" data-upload>${icon('upload')} Subir material</button>` })}</div>`;
+  };
+  view.querySelector('[data-subject]').addEventListener('change', (e) => {
+    subjectId = e.target.value;
+    sessionStorage.setItem('admin-material-subject', subjectId);
+    load();
+  });
+  view.querySelector('[data-search]').addEventListener('input', (e) => {
+    q = e.target.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(load, 250);
+  });
+  view.addEventListener('click', (e) => {
+    if (e.target.closest('[data-upload]')) uploadModal({ subjectId: subjectId || undefined });
+  });
+  await load();
+}
+
+async function pageStudents(ctx) {
+  Shell.setTitle('Estudiantes', 'Quién puede entrar al portal');
+  ctx.render(skeleton([['100%', '60px'], ['100%', '400px']]));
+  await refreshRefs();
+  const students = await api('/admin/students');
+  if (!ctx.alive()) return;
+  const open = A.settings.allow_self_register === '1';
+  let q = '';
+
+  ctx.render(`
+    <div class="alert ${open ? 'warn' : 'info'}">${icon(open ? 'alert' : 'lock')}<span>${
+      open
+        ? '<strong>Registro abierto:</strong> cualquier persona que escriba una cédula y un correo nuevos podrá entrar y quedará registrada aquí.'
+        : '<strong>Acceso restringido:</strong> solo los estudiantes de esta lista pueden entrar, usando su cédula y el correo registrado.'
+    } <a href="#/ajustes">Cambiar</a></span></div>
+    <section class="toolbar">
+      <div class="input-icon search">${icon('search')}<input class="input" type="search" placeholder="Buscar por nombre, cédula o correo…" data-search></div>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" data-import>${icon('upload')} Importar lista</button>
+      <button class="btn btn-primary" data-add>${icon('user-plus')} Agregar</button>
+    </section>
+    <section class="card" data-table></section>
+  `);
+
+  const view = document.getElementById('view');
+  const draw = () => {
+    const term = q.trim().toLowerCase();
+    const list = term ? students.filter((s) => [s.name, s.email, s.cedula].some((v) => (v || '').toLowerCase().includes(term))) : students;
+    view.querySelector('[data-table]').innerHTML = list.length
+      ? `<div class="table-wrap"><table class="table responsive">
+          <thead><tr><th>Estudiante</th><th>Cédula</th><th>Semestre</th><th>Estado</th><th>Último ingreso</th><th></th></tr></thead>
+          <tbody>${list
+            .map(
+              (s) => `<tr>
+                <td class="c-main"><div class="person"><div class="avatar">${esc(initials(s.name || s.email))}</div><div style="min-width:0"><strong>${esc(s.name || 'Sin nombre')}</strong><span>${esc(s.email)}</span></div></div></td>
+                <td class="c-extra">${icon('id')} ${esc(s.cedula)}</td>
+                <td class="hide-mobile">${esc(s.semester_name || '—')}</td>
+                <td class="hide-mobile"><span class="status-dot" style="--c:${s.active ? 'var(--success)' : 'var(--text-3)'}">${s.active ? 'Activo' : 'Inactivo'}</span></td>
+                <td class="hide-mobile muted">${s.last_login ? timeAgo(s.last_login) : 'Nunca'}</td>
+                <td class="c-actions" style="text-align:right;white-space:nowrap">
+                  <button class="icon-btn sm plain" data-edit="${s.id}" aria-label="Editar">${icon('edit')}</button>
+                  <button class="icon-btn sm plain danger" data-del="${s.id}" aria-label="Eliminar">${icon('trash')}</button>
+                </td>
+              </tr>`
+            )
+            .join('')}</tbody></table></div>`
+      : emptyState({
+          icon: 'users',
+          title: term ? 'Sin resultados' : 'Aún no hay estudiantes',
+          text: term ? 'Prueba con otro dato.' : 'Agrégalos uno por uno o pega la lista completa desde Excel.',
+          action: term ? '' : `<div class="row wrap" style="justify-content:center"><button class="btn btn-ghost" data-import>${icon('upload')} Importar lista</button><button class="btn btn-primary" data-add>${icon('user-plus')} Agregar</button></div>`,
+        });
+  };
+  view.addEventListener('click', (e) => {
+    const find = (id) => students.find((s) => String(s.id) === id);
+    const t = e.target.closest('[data-add],[data-import],[data-edit],[data-del]');
+    if (!t) return;
+    if ('add' in t.dataset) studentForm(null);
+    else if ('import' in t.dataset) importForm();
+    else if (t.dataset.edit) studentForm(find(t.dataset.edit));
+    else if (t.dataset.del) deleteStudent(find(t.dataset.del)).catch((ex) => toast(ex.message, 'error'));
+  });
+  view.querySelector('[data-search]').addEventListener('input', (e) => {
+    q = e.target.value;
+    draw();
+  });
+  draw();
+}
+
+async function pageSettings(ctx) {
+  Shell.setTitle('Ajustes', 'Portal y cuenta de administrador');
+  const s = await api('/admin/settings');
+  if (!ctx.alive()) return;
+
+  const siteFields = [
+    { name: 'site_name', label: 'Nombre del portal', required: true, placeholder: 'Ej: Economía 02' },
+    { name: 'site_tagline', label: 'Subtítulo', placeholder: 'Ej: Portal académico' },
+    { name: 'university', label: 'Universidad / facultad', placeholder: 'Ej: Facultad de Ciencias Económicas', full: true },
+    { name: 'period', label: 'Período actual', placeholder: 'Ej: 2026-II' },
+    { name: 'welcome_message', label: 'Mensaje de bienvenida', type: 'textarea', rows: 3, full: true },
+    {
+      name: 'allow_self_register',
+      type: 'toggle',
+      toggleLabel: 'Registro abierto: cualquiera con cédula y correo puede crear su acceso',
+      full: true,
+    },
+  ];
+  const accountFields = [
+    { name: 'username', label: 'Usuario', required: true },
+    { name: 'name', label: 'Tu nombre', placeholder: 'Ej: Ana Pérez' },
+    { name: 'current_password', label: 'Contraseña actual', type: 'password', required: true, attrs: 'autocomplete="current-password"', full: true },
+    { name: 'new_password', label: 'Nueva contraseña', type: 'password', attrs: 'autocomplete="new-password" minlength="8"', hint: 'Mínimo 8 caracteres. Déjala vacía para no cambiarla.' },
+    { name: 'confirm_password', label: 'Repite la nueva contraseña', type: 'password', attrs: 'autocomplete="new-password"' },
+  ];
+
+  ctx.render(`
+    <section class="grid-2" style="align-items:start">
+      <form class="card card-pad stack" data-site novalidate>
+        <div><h3 style="font-size:18px">Portal</h3><p class="muted small">Así se ve el portal para los estudiantes.</p></div>
+        <div class="alert" data-error hidden></div>
+        ${fieldsHtml(siteFields, { ...s, allow_self_register: s.allow_self_register === '1' })}
+        <div><button class="btn btn-primary" type="submit">${icon('check')} Guardar ajustes</button></div>
+      </form>
+      <form class="card card-pad stack" data-account novalidate>
+        <div><h3 style="font-size:18px">Tu cuenta de administrador</h3><p class="muted small">Solo tú puedes entrar a este panel.</p></div>
+        ${A.auth.user.must_change ? `<div class="alert warn">${icon('alert')}<span>Estás usando la contraseña inicial. Elige una nueva.</span></div>` : ''}
+        <div class="alert" data-error hidden></div>
+        ${fieldsHtml(accountFields, { username: s.admin.username, name: s.admin.name || '' })}
+        <div><button class="btn btn-primary" type="submit">${icon('key')} Actualizar cuenta</button></div>
+      </form>
+    </section>
+  `);
+
+  const wire = (form, fields, send) => {
+    bindFields(form);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const err = form.querySelector('[data-error]');
+      err.hidden = true;
+      const btn = form.querySelector('[type=submit]');
+      setBusy(btn, true, 'Guardando…');
+      try {
+        await send(readFields(form, fields), form);
+      } catch (ex) {
+        err.innerHTML = `${icon('alert')}<span>${esc(ex.message)}</span>`;
+        err.hidden = false;
+      } finally {
+        setBusy(btn, false);
+      }
+    });
+  };
+
+  wire(document.querySelector('[data-site]'), siteFields, async (v) => {
+    const saved = await api('/admin/settings', { method: 'PUT', body: v });
+    A.settings = saved;
+    document.querySelectorAll('[data-site-name]').forEach((el) => (el.textContent = saved.site_name));
+    document.querySelectorAll('[data-site-tagline]').forEach((el) => (el.textContent = saved.site_tagline || saved.university || ''));
+    Shell.siteName = saved.site_name;
+    toast('Ajustes guardados');
+  });
+
+  wire(document.querySelector('[data-account]'), accountFields, async (v, form) => {
+    if (v.new_password && v.new_password !== v.confirm_password) throw new Error('Las contraseñas nuevas no coinciden');
+    await api('/admin/account', { method: 'PUT', body: v });
+    toast('Cuenta actualizada');
+    if (v.new_password) A.auth.user.must_change = 0;
+    A.auth.user.username = v.username;
+    A.auth.user.name = v.name;
+    document.querySelectorAll('[data-user-name]').forEach((el) => (el.textContent = v.name || v.username));
+    document.querySelectorAll('[data-user-avatar]').forEach((el) => (el.textContent = initials(v.name || v.username)));
+    form.querySelectorAll('input[type=password]').forEach((i) => (i.value = ''));
+    form.querySelector('.alert.warn')?.remove();
+  });
+}
+
+/* ---------- menú "Más" (móvil) ---------- */
+
+function moreMenu() {
+  const m = openModal({
+    title: 'Más opciones',
+    size: 'sm',
+    body: `<div class="sheet-menu">
+      <a href="#/semestres" data-close><span class="m-ico">${icon('layers')}</span>Semestres</a>
+      <a href="#/estudiantes" data-close><span class="m-ico">${icon('users')}</span>Estudiantes</a>
+      <a href="#/ajustes" data-close><span class="m-ico">${icon('settings')}</span>Ajustes</a>
+      <a href="/app" target="_blank" rel="noopener" data-close><span class="m-ico">${icon('eye')}</span>Ver como estudiante</a>
+      <button type="button" data-theme><span class="m-ico">${icon(currentTheme() === 'dark' ? 'sun' : 'moon')}</span>Cambiar tema</button>
+      <button type="button" data-out><span class="m-ico" style="color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent)">${icon('logout')}</span>Cerrar sesión</button>
+    </div>`,
+  });
+  m.el.querySelector('[data-theme]').onclick = () => {
+    setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+    m.close();
+  };
+  m.el.querySelector('[data-out]').onclick = logout;
+}
+
+/* ---------- arranque ---------- */
+
+(async function start() {
+  let data;
+  try {
+    data = await api('/auth/me');
+  } catch {
+    location.href = '/';
+    return;
+  }
+  if (!data.auth || data.auth.role !== 'admin') {
+    location.href = '/';
+    return;
+  }
+  A.auth = data.auth;
+  A.settings = await api('/admin/settings');
+
+  const viewAs = document.getElementById('view-as-student');
+  if (viewAs) viewAs.innerHTML = `${icon('eye')} Ver como estudiante`;
+
+  Shell.init({
+    role: 'Administrador',
+    user: A.auth.user,
+    settings: A.settings,
+    nav: [
+      { section: 'General' },
+      { href: '#/resumen', icon: 'home', label: 'Resumen' },
+      { href: '#/calendario', icon: 'calendar', label: 'Calendario' },
+      { section: 'Contenido' },
+      { href: '#/semestres', icon: 'layers', label: 'Semestres' },
+      { href: '#/materias', icon: 'book', label: 'Materias' },
+      { href: '#/materiales', icon: 'folder', label: 'Materiales' },
+      { section: 'Acceso' },
+      { href: '#/estudiantes', icon: 'users', label: 'Estudiantes' },
+      { href: '#/ajustes', icon: 'settings', label: 'Ajustes' },
+    ],
+    bottomNav: [
+      { href: '#/resumen', icon: 'home', label: 'Resumen' },
+      { href: '#/materias', icon: 'book', label: 'Materias' },
+      { href: '#/calendario', icon: 'calendar', label: 'Calendario' },
+      { href: '#/materiales', icon: 'folder', label: 'Materiales' },
+      { action: 'more', icon: 'more', label: 'Más', matches: ['/semestres', '/estudiantes', '/ajustes'] },
+    ],
+    onMore: moreMenu,
+  });
+
+  await refreshRefs();
+  Router.on('/resumen', pageOverview)
+    .on('/semestres', pageSemesters)
+    .on('/materias', pageSubjectsAdmin)
+    .on('/materias/:id', pageSubjectAdmin)
+    .on('/calendario', pageCalendarAdmin)
+    .on('/materiales', pageMaterialsAdmin)
+    .on('/estudiantes', pageStudents)
+    .on('/ajustes', pageSettings)
+    .start('/resumen');
+})();
