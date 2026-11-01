@@ -32,7 +32,7 @@ after(() => {
 /** Cliente HTTP con su propia cookie de sesión. */
 function client() {
   let cookie = '';
-  return async (method, url, body, { form } = {}) => {
+  const fn = async (method, url, body, { form } = {}) => {
     const headers = {};
     if (cookie) headers.cookie = cookie;
     let payload;
@@ -53,10 +53,13 @@ function client() {
     }
     return { status: res.status, data, headers: res.headers };
   };
+  fn.cookie = () => cookie;
+  return fn;
 }
 
 const admin = client();
 const student = client();
+const studentCookie = async () => student.cookie();
 const ids = {};
 
 test('sin sesión no se puede ver el contenido', async () => {
@@ -227,6 +230,26 @@ test('el estudiante ve materias, clases, materiales y calendario', async () => {
 
   const prof = await student('PUT', '/api/me', { name: 'María José Pérez', semester_id: ids.semester });
   assert.equal(prof.status, 200);
+});
+
+test('archivo de Vercel Blob abierto desde un servidor sin acceso: aviso claro', async () => {
+  const { createClient } = require('@libsql/client');
+  const c = createClient({ url: 'file:' + path.join(process.env.DATA_DIR, 'portal.db') });
+  const r = await c.execute({
+    sql: "INSERT INTO materials (subject_id, title, kind, url, file_name, original_name, size) VALUES (?, 'En Blob', 'file', ?, ?, 'en-blob.pdf', 10)",
+    args: [ids.subject, 'https://teststore.private.blob.vercel-storage.com/materiales/1/en-blob.pdf', 'materiales/1/en-blob.pdf'],
+  });
+  c.close();
+  const mid = Number(r.lastInsertRowid);
+
+  const asJson = await student('GET', `/api/materials/${mid}/file`);
+  assert.equal(asJson.status, 503);
+  assert.match(asJson.data.error, /Vercel Blob/);
+
+  const page = await fetch(`${base}/api/materials/${mid}/file?download=1`, { headers: { accept: 'text/html', cookie: await studentCookie() } });
+  assert.equal(page.status, 503);
+  assert.match(await page.text(), /No se pudo abrir el archivo[\s\S]*sistema-de-economia-02\.vercel\.app/);
+  await admin('DELETE', `/api/admin/materials/${mid}`);
 });
 
 test('el estudiante no puede usar el panel admin', async () => {

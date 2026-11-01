@@ -34,6 +34,7 @@ async function systemStatus() {
     archivos,
     archivos_ok: st.mode !== 'missing',
     en_vercel: db.IS_VERCEL,
+    entorno: process.env.VERCEL_ENV || (db.IS_VERCEL ? 'vercel' : 'local'),
     version: pkg.version,
   };
 }

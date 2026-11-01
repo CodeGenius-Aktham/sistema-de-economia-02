@@ -43,6 +43,28 @@ function contentDisposition(type, filename) {
 
 const isBlobFile = (m) => m && m.kind === 'file' && typeof m.url === 'string' && /^https:\/\//.test(m.url);
 
+/**
+ * Error al abrir un archivo. Los enlaces "Ver" y "Descargar" abren una pestaña nueva,
+ * así que al navegador se le muestra una página legible en lugar de un JSON.
+ */
+function fileError(req, res, status, message) {
+  res.status(status);
+  if (req.accepts(['json', 'html']) === 'html') {
+    const safe = String(message).replace(/[<>&]/g, '');
+    return res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>No se pudo abrir el archivo</title>
+<link rel="stylesheet" href="/css/styles.css"></head><body><div class="login-panel" style="min-height:100vh">
+<div class="login-card"><h2>No se pudo abrir el archivo</h2><div class="alert warn"><span>${safe}</span></div>
+<a class="btn btn-primary" href="/">Volver al portal</a></div></div></body></html>`);
+  }
+  return res.json({ error: message });
+}
+
+const BLOB_UNAVAILABLE =
+  'Este archivo está guardado en Vercel Blob, pero el servidor que atendió la petición no tiene acceso a él. ' +
+  'Ábrelo desde la dirección principal del portal (https://sistema-de-economia-02.vercel.app). ' +
+  'Si estás usando el portal en tu computadora, agrega BLOB_READ_WRITE_TOKEN a tu archivo .env.';
+
 /** Envía el archivo de un material al navegador (ver en línea o descargar). */
 async function sendFile(req, res, m) {
   const name = m.original_name || m.file_name || 'archivo';
@@ -56,13 +78,19 @@ async function sendFile(req, res, m) {
   };
 
   if (isBlobFile(m)) {
-    if (!BLOB_TOKEN) return res.status(503).json({ error: 'El almacenamiento de archivos no está configurado' });
-    const result = await blob().get(m.url, {
-      access: 'private',
-      token: BLOB_TOKEN,
-      ifNoneMatch: req.headers['if-none-match'] || undefined,
-    });
-    if (!result) return res.status(404).json({ error: 'El archivo ya no está disponible' });
+    let result;
+    try {
+      // Sin BLOB_READ_WRITE_TOKEN, en Vercel el SDK usa la conexión automática (OIDC) del Blob.
+      result = await blob().get(m.url, {
+        access: 'private',
+        ...(BLOB_TOKEN ? { token: BLOB_TOKEN } : {}),
+        ifNoneMatch: req.headers['if-none-match'] || undefined,
+      });
+    } catch (err) {
+      console.error('No se pudo leer el archivo de Vercel Blob:', err.message);
+      return fileError(req, res, 503, BLOB_UNAVAILABLE);
+    }
+    if (!result) return fileError(req, res, 404, 'El archivo ya no está disponible.');
     if (result.statusCode === 304) {
       res.set({ ETag: result.blob.etag, 'Cache-Control': 'private, no-cache' });
       return res.status(304).end();
@@ -76,7 +104,7 @@ async function sendFile(req, res, m) {
   }
 
   const filePath = path.join(UPLOAD_DIR, path.basename(m.file_name || ''));
-  if (!m.file_name || !fs.existsSync(filePath)) return res.status(404).json({ error: 'El archivo ya no está disponible' });
+  if (!m.file_name || !fs.existsSync(filePath)) return fileError(req, res, 404, 'El archivo ya no está disponible.');
   res.set({ ...headers, 'Cache-Control': 'private, max-age=3600' });
   res.sendFile(filePath);
 }
