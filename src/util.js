@@ -90,6 +90,17 @@ function isEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
+/** Teléfono: dígitos con +, espacios, guiones, puntos o paréntesis (6 a 15 dígitos). */
+function normalizePhone(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim().replace(/\s+/g, ' ').slice(0, 30);
+}
+
+function isPhone(s) {
+  const digits = s.replace(/\D/g, '');
+  return /^\+?[\d\s().-]+$/.test(s) && digits.length >= 6 && digits.length <= 15;
+}
+
 function isHttpUrl(s) {
   try {
     const u = new URL(s);
@@ -125,6 +136,8 @@ module.exports = {
   isValidCedula,
   normalizeEmail,
   isEmail,
+  normalizePhone,
+  isPhone,
   isHttpUrl,
   today,
 };

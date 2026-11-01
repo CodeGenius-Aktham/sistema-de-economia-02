@@ -88,7 +88,7 @@ test('el admin crea semestre, materia, clase y evaluación', async () => {
     name: 'Microeconomía I',
     code: 'ECO-301',
     professor: 'Prof. Ana Rodríguez',
-    professor_email: 'ana@uni.edu',
+    professor_phone: '+58 414-123 4567',
     schedule: 'Lun y Mié 8:00',
     color: '#ec4899',
     credits: '4',
@@ -97,6 +97,10 @@ test('el admin crea semestre, materia, clase y evaluación', async () => {
   assert.equal(sub.status, 201);
   ids.subject = sub.data.id;
   assert.equal(sub.data.credits, 4);
+  assert.equal(sub.data.professor_phone, '+58 414-123 4567');
+
+  const badPhone = await admin('POST', '/api/admin/subjects', { semester_id: ids.semester, name: 'X', professor_phone: 'llamar a Ana' });
+  assert.equal(badPhone.status, 400);
 
   const cls = await admin('POST', '/api/admin/classes', { subject_id: ids.subject, title: 'Oferta y demanda', date: '2026-11-02', content: 'Tema 1' });
   assert.equal(cls.status, 201);

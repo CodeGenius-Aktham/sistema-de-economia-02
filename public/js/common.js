@@ -36,6 +36,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
   mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   left: '<path d="m15 18-6-6 6-6"/>',
   right: '<path d="m9 18 6-6-6-6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
@@ -1021,10 +1022,17 @@ function subjectCard(s) {
   </a>`;
 }
 
+/** Enlace para llamar y, si el número trae código de país (+…), también para WhatsApp. */
+function phoneLinks(phone) {
+  const tel = String(phone).replace(/[^\d+]/g, '');
+  const wa = tel.startsWith('+') ? `https://wa.me/${tel.slice(1)}` : '';
+  return `<a href="tel:${esc(tel)}">${esc(phone)}</a>${wa ? ` · <a href="${esc(wa)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}`;
+}
+
 function subjectHero(s, { back = '#/materias', actions = '' } = {}) {
   const tiles = [
-    s.professor && ['user', 'Profesor', s.professor_email ? `<a href="mailto:${esc(s.professor_email)}">${esc(s.professor)}</a>` : esc(s.professor)],
-    s.professor_email && !s.professor && ['mail', 'Correo', `<a href="mailto:${esc(s.professor_email)}">${esc(s.professor_email)}</a>`],
+    s.professor && ['user', 'Profesor', esc(s.professor)],
+    s.professor_phone && ['phone', 'Teléfono', phoneLinks(s.professor_phone)],
     s.schedule && ['clock', 'Horario', esc(s.schedule)],
     s.classroom && ['pin', 'Aula', esc(s.classroom)],
     s.credits && ['award', 'Créditos', `${s.credits} UC`],

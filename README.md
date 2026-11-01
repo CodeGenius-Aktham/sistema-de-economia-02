@@ -87,7 +87,7 @@ npm install
 Entra en la pestaña **Administrador** de la pantalla de inicio. En el **Resumen** verás una guía de primeros pasos:
 
 1. **Semestres** → crea “Semestre I”, “Semestre II”…
-2. **Materias** → agrega cada materia con su color, profesor, horario, aula, créditos e información (programa, bibliografía, forma de evaluación…). Los enlaces que escribas se vuelven clicables.
+2. **Materias** → agrega cada materia con su color, profesor y su teléfono (con botón de WhatsApp), horario, aula, créditos e información (programa, bibliografía, forma de evaluación…). Los enlaces que escribas se vuelven clicables.
 3. Dentro de cada materia:
    - **Clases**: registra el tema y contenido de cada clase.
    - **Materiales**: sube varios archivos a la vez (arrastrando o eligiendo) o pega enlaces. Puedes asociarlos a una clase.

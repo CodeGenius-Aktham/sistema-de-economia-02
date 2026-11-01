@@ -103,14 +103,14 @@ async function main() {
     const semId = (await run('INSERT INTO semesters (name, number, period, position) VALUES (?, ?, ?, ?)', sem.name, sem.number, '2026-II', i + 1)).lastInsertRowid;
     for (const [j, [name, code, color, professor, schedule, classroom]] of sem.subjects.entries()) {
       subjectIds[code] = (await run(
-        `INSERT INTO subjects (semester_id, name, code, color, professor, professor_email, schedule, classroom, credits, position, description)
+        `INSERT INTO subjects (semester_id, name, code, color, professor, professor_phone, schedule, classroom, credits, position, description)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         semId,
         name,
         code,
         color,
         professor,
-        professor.replace('Prof. ', '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '.') + '@universidad.edu',
+        `+58 414 555 ${String(1000 + i * 10 + j).slice(-4)}`,
         schedule,
         classroom,
         j === 0 ? 5 : 4,

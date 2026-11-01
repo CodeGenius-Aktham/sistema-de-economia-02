@@ -23,6 +23,8 @@ const {
   isValidCedula,
   normalizeEmail,
   isEmail,
+  normalizePhone,
+  isPhone,
   isHttpUrl,
   today,
 } = require('../util');
@@ -180,14 +182,14 @@ router.delete('/semesters/:id', async (req, res) => {
 async function subjectInput(body) {
   const semesterId = id(body.semester_id);
   if (!semesterId || !(await get('SELECT id FROM semesters WHERE id = ?', semesterId))) throw bad('Selecciona un semestre válido');
-  const email = normalizeEmail(body.professor_email);
-  if (email && !isEmail(email)) throw bad('El correo del profesor no es válido');
+  const phone = normalizePhone(body.professor_phone);
+  if (phone && !isPhone(phone)) throw bad('El teléfono del profesor no es válido (ej: +58 414 123 4567)');
   return {
     semester_id: semesterId,
     name: requiredStr(body.name, 'Nombre de la materia', 120),
     code: str(body.code, 30),
     professor: str(body.professor, 120),
-    professor_email: email || null,
+    professor_phone: phone || null,
     schedule: str(body.schedule, 200),
     classroom: str(body.classroom, 120),
     credits: int(body.credits),
@@ -202,7 +204,7 @@ const SUBJECT_FIELDS = [
   'name',
   'code',
   'professor',
-  'professor_email',
+  'professor_phone',
   'schedule',
   'classroom',
   'credits',

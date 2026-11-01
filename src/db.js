@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS subjects (
   code            TEXT,
   professor       TEXT,
   professor_email TEXT,
+  professor_phone TEXT,
   schedule        TEXT,
   classroom       TEXT,
   credits         INTEGER,
@@ -226,6 +227,23 @@ const setSettingSql = (key, value) => [
   value,
 ];
 
+/* ---------- migraciones (bases creadas con versiones anteriores) ---------- */
+
+async function addColumnIfMissing(table, column, type) {
+  const cols = await all(`SELECT name FROM pragma_table_info('${table}')`);
+  if (cols.some((c) => c.name === column)) return;
+  try {
+    await db().execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  } catch (err) {
+    // Otra instancia pudo agregarla al mismo tiempo.
+    if (!/duplicate column/i.test(err.message)) throw err;
+  }
+}
+
+async function migrate() {
+  await addColumnIfMissing('subjects', 'professor_phone', 'TEXT');
+}
+
 /* ---------- inicialización (una vez por proceso) ---------- */
 
 let readyPromise = null;
@@ -237,6 +255,7 @@ async function init() {
     await c.execute('PRAGMA busy_timeout = 5000');
   }
   await c.executeMultiple(SCHEMA);
+  await migrate();
   await batch(Object.entries(DEFAULT_SETTINGS).map(([k, v]) => ['INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', k, v]));
 
   const auth = require('./auth');
