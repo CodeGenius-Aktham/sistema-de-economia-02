@@ -30,6 +30,7 @@ const {
 } = require('../util');
 const { subjectDetail, listEvents, listMaterials, MATERIAL_SELECT } = require('./portal');
 const { systemStatus } = require('../status');
+const fileLinks = require('../filelinks');
 
 const router = express.Router();
 router.use(auth.requireAdmin);
@@ -325,7 +326,7 @@ router.post(
         description,
         url
       );
-      return res.status(201).json([await get(`${MATERIAL_SELECT} WHERE m.id = ?`, info.lastInsertRowid)]);
+      return res.status(201).json(await fileLinks.addFileUrls([await get(`${MATERIAL_SELECT} WHERE m.id = ?`, info.lastInsertRowid)]));
     }
 
     // Archivos: en disco (multipart) o ya subidos a Vercel Blob (JSON con sus datos).
@@ -371,7 +372,7 @@ router.post(
       })
     );
     const ids = results.map((r) => r.lastInsertRowid);
-    res.status(201).json(await all(`${MATERIAL_SELECT} WHERE m.id IN (${ids.map(() => '?').join(', ')}) ORDER BY m.id`, ...ids));
+    res.status(201).json(await fileLinks.addFileUrls(await all(`${MATERIAL_SELECT} WHERE m.id IN (${ids.map(() => '?').join(', ')}) ORDER BY m.id`, ...ids)));
   })
 );
 
@@ -423,7 +424,7 @@ router.put(
         materialId
       );
     }
-    res.json(await get(`${MATERIAL_SELECT} WHERE m.id = ?`, materialId));
+    res.json(await fileLinks.addFileUrls(await get(`${MATERIAL_SELECT} WHERE m.id = ?`, materialId)));
   })
 );
 

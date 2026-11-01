@@ -597,7 +597,8 @@ function eventItem(e, { showSubject = true } = {}) {
 
 function materialItem(m, { admin = false, showSubject = false, showClass = true } = {}) {
   const k = fileKind(m);
-  const fileUrl = `/api/materials/${m.id}/file`;
+  const fileUrl = m.file_url || `/api/materials/${m.id}/file`;
+  const downloadUrl = fileUrl + (fileUrl.includes('?') ? '&' : '?') + 'download=1';
   const canView = m.kind === 'file' && INLINE_EXT.includes(k.ext);
   const meta = [
     `<span>${esc(k.label)}</span>`,
@@ -611,8 +612,8 @@ function materialItem(m, { admin = false, showSubject = false, showClass = true 
     actions = `<a class="btn btn-soft btn-sm" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer" title="Abrir enlace">${icon('external')}<span class="btn-label">Abrir</span></a>`;
   } else {
     actions =
-      (canView ? `<a class="btn btn-ghost btn-sm" href="${fileUrl}" target="_blank" rel="noopener" title="Ver">${icon('eye')}<span class="btn-label">Ver</span></a>` : '') +
-      `<a class="btn btn-soft btn-sm" href="${fileUrl}?download=1" download="${esc(m.original_name || m.title)}" title="Descargar">${icon('download')}<span class="btn-label">Descargar</span></a>`;
+      (canView ? `<a class="btn btn-ghost btn-sm" href="${esc(fileUrl)}" target="_blank" rel="noopener" title="Ver">${icon('eye')}<span class="btn-label">Ver</span></a>` : '') +
+      `<a class="btn btn-soft btn-sm" href="${esc(downloadUrl)}" download="${esc(m.original_name || m.title)}" title="Descargar">${icon('download')}<span class="btn-label">Descargar</span></a>`;
   }
   if (admin) {
     actions += `<button type="button" class="icon-btn sm plain" data-edit-material="${m.id}" title="Editar" aria-label="Editar">${icon('edit')}</button>
@@ -1083,7 +1084,8 @@ function classTimeline(s, { admin = false } = {}) {
             ? `<div class="tl-files">${files
                 .map((m) => {
                   const k = fileKind(m);
-                  const href = m.kind === 'link' ? esc(m.url) : `/api/materials/${m.id}/file${INLINE_EXT.includes(k.ext) ? '' : '?download=1'}`;
+                  const base = m.file_url || `/api/materials/${m.id}/file`;
+                  const href = esc(m.kind === 'link' ? m.url : base + (INLINE_EXT.includes(k.ext) ? '' : (base.includes('?') ? '&' : '?') + 'download=1'));
                   return `<a class="tl-file" style="--fc:${k.color}" href="${href}" target="_blank" rel="noopener noreferrer">${icon(k.icon)}<span>${esc(m.title)}</span></a>`;
                 })
                 .join('')}</div>`

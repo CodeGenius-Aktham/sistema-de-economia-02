@@ -217,7 +217,7 @@ const DEFAULT_SETTINGS = {
 
 async function getSettings() {
   const out = { ...DEFAULT_SETTINGS };
-  for (const row of await all('SELECT key, value FROM settings')) out[row.key] = row.value;
+  for (const row of await all("SELECT key, value FROM settings WHERE key <> 'file_secret'")) out[row.key] = row.value;
   return out;
 }
 

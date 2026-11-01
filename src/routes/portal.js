@@ -3,10 +3,32 @@
 const express = require('express');
 const { all, get, run } = require('../db');
 const storage = require('../storage');
+const fileLinks = require('../filelinks');
 const { requireAuth } = require('../auth');
 const { notFound, bad, id, str, isDate, today } = require('../util');
 
 const router = express.Router();
+
+/*
+ * Archivos: se aceptan con sesión o con un enlace firmado (file_url). En el teléfono
+ * el archivo suele abrirse en otro navegador o en el gestor de descargas, sin la sesión.
+ */
+router.get('/materials/:id/file', async (req, res) => {
+  const materialId = id(req.params.id);
+  const signed = await fileLinks.verify(materialId, req.query.exp, req.query.sig);
+  if (!signed && !req.auth) {
+    return storage.fileError(
+      req,
+      res,
+      401,
+      'Para abrir este archivo inicia sesión en el portal y vuelve a tocar "Ver" o "Descargar". Si el enlace es de hace muchas horas, ábrelo de nuevo desde la materia.'
+    );
+  }
+  const m = await get('SELECT * FROM materials WHERE id = ?', materialId);
+  if (!m || m.kind !== 'file') return storage.fileError(req, res, 404, 'El archivo no existe o fue eliminado.');
+  await storage.sendFile(req, res, m);
+});
+
 router.use(requireAuth);
 
 /* ---------- consultas compartidas (también las usa el panel admin) ---------- */
@@ -67,7 +89,7 @@ async function subjectDetail(subjectId) {
         ORDER BY c.date IS NULL, c.date, c.id`,
       subjectId
     ),
-    all(`${MATERIAL_SELECT} WHERE m.subject_id = ? ORDER BY m.created_at DESC, m.id DESC`, subjectId),
+    all(`${MATERIAL_SELECT} WHERE m.subject_id = ? ORDER BY m.created_at DESC, m.id DESC`, subjectId).then(fileLinks.addFileUrls),
     all(`${EVENT_SELECT} WHERE e.subject_id = ? ORDER BY e.date, e.start_time`, subjectId),
   ]);
   if (!subject) return null;
@@ -96,7 +118,7 @@ function listEvents({ from, to, semesterId, subjectId, limit }) {
   return all(`${EVENT_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.date, e.start_time IS NULL, e.start_time, e.id ${lim}`, ...params);
 }
 
-function listMaterials({ subjectId, semesterId, q, limit }) {
+async function listMaterials({ subjectId, semesterId, q, limit }) {
   const where = [];
   const params = [];
   if (subjectId) {
@@ -112,9 +134,8 @@ function listMaterials({ subjectId, semesterId, q, limit }) {
     params.push(like, like, like, like);
   }
   const lim = Math.min(Math.max(Number(limit) || 200, 1), 500);
-  return all(
-    `${MATERIAL_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.created_at DESC, m.id DESC LIMIT ${lim}`,
-    ...params
+  return fileLinks.addFileUrls(
+    await all(`${MATERIAL_SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY m.created_at DESC, m.id DESC LIMIT ${lim}`, ...params)
   );
 }
 
@@ -193,14 +214,6 @@ router.get('/dashboard', async (req, res) => {
     subjects,
     counts: { subjects: subjects.length, materials: materialCount.n, upcoming30: upcoming30.n },
   });
-});
-
-/* ---------- archivos ---------- */
-
-router.get('/materials/:id/file', async (req, res) => {
-  const m = await get('SELECT * FROM materials WHERE id = ?', id(req.params.id));
-  if (!m || m.kind !== 'file') throw notFound('El archivo no existe');
-  await storage.sendFile(req, res, m);
 });
 
 /* ---------- perfil del estudiante ---------- */

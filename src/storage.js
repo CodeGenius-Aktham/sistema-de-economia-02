@@ -192,6 +192,7 @@ function status() {
 module.exports = {
   MODE,
   status,
+  fileError,
   MAX_UPLOAD_MB,
   sendFile,
   removeFiles,

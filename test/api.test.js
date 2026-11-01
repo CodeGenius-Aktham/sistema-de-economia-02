@@ -232,6 +232,32 @@ test('el estudiante ve materias, clases, materiales y calendario', async () => {
   assert.equal(prof.status, 200);
 });
 
+test('enlaces firmados: el archivo se abre sin sesión (teléfono, gestor de descargas)', async () => {
+  const detail = await student('GET', `/api/subjects/${ids.subject}`);
+  const file = detail.data.materials.find((m) => m.kind === 'file');
+  assert.match(file.file_url, /^\/api\/materials\/\d+\/file\?exp=\d+&sig=[\w-]{32}$/);
+  assert.equal(detail.data.materials.find((m) => m.kind === 'link').file_url, undefined);
+
+  // Sin cookies, como lo pide el visor de PDF o el gestor de descargas del celular.
+  const anon = await fetch(base + file.file_url + '&download=1');
+  assert.equal(anon.status, 200);
+  assert.equal(await anon.text(), '%PDF-1.4 contenido de prueba');
+
+  const tampered = await fetch(base + file.file_url.replace(/sig=.{4}/, 'sig=AAAA'), { headers: { accept: 'text/html' } });
+  assert.equal(tampered.status, 401);
+  assert.match(await tampered.text(), /inicia sesión/);
+
+  const past = Math.floor(Date.now() / 1000) - 60;
+  const expired = await fetch(base + file.file_url.replace(/exp=\d+/, `exp=${past}`));
+  assert.equal(expired.status, 401);
+
+  const noSig = await fetch(`${base}/api/materials/${file.id}/file`);
+  assert.equal(noSig.status, 401);
+
+  const settings = await admin('GET', '/api/admin/settings');
+  assert.equal(settings.data.file_secret, undefined, 'el secreto no se expone');
+});
+
 test('archivo de Vercel Blob abierto desde un servidor sin acceso: aviso claro', async () => {
   const { createClient } = require('@libsql/client');
   const c = createClient({ url: 'file:' + path.join(process.env.DATA_DIR, 'portal.db') });
