@@ -31,6 +31,7 @@ const {
 const { subjectDetail, listEvents, listMaterials, MATERIAL_SELECT } = require('./portal');
 const { systemStatus } = require('../status');
 const fileLinks = require('../filelinks');
+const { parseSchedule, datesFor, fold } = require('../schedule');
 
 const router = express.Router();
 router.use(auth.requireAdmin);
@@ -39,7 +40,7 @@ router.use((req, res, next) => {
   next();
 });
 
-const EVENT_TYPES = ['examen', 'parcial', 'quiz', 'entrega', 'exposicion', 'otro'];
+const EVENT_TYPES = ['examen', 'parcial', 'quiz', 'entrega', 'exposicion', 'otro', 'clase'];
 const { MAX_UPLOAD_MB } = storage;
 
 /* ---------- subida de archivos al disco (solo en modo local) ---------- */
@@ -100,9 +101,9 @@ router.get('/stats', async (req, res) => {
       n('SELECT COUNT(*) AS n FROM materials'),
       n('SELECT COUNT(*) AS n FROM students'),
       n('SELECT COUNT(*) AS n FROM students WHERE active = 1'),
-      n('SELECT COUNT(*) AS n FROM events WHERE date >= ?', t),
+      n("SELECT COUNT(*) AS n FROM events WHERE date >= ? AND type <> 'clase'", t),
       n("SELECT COALESCE(SUM(size), 0) AS n FROM materials WHERE kind = 'file'"),
-      listEvents({ from: t, limit: 6 }),
+      listEvents({ from: t, limit: 6, evaluationsOnly: true }),
       listMaterials({ limit: 6 }),
     ]);
   res.json({
@@ -467,6 +468,68 @@ router.post('/events', async (req, res) => {
     ...EVENT_FIELDS.map((f) => e[f])
   );
   res.status(201).json(await get('SELECT * FROM events WHERE id = ?', info.lastInsertRowid));
+});
+
+/**
+ * Carga un horario semanal: crea una sesión "Clase" por cada día entre from y to.
+ * Con replace, primero borra las clases con el mismo título en ese período.
+ */
+router.post('/events/schedule', async (req, res) => {
+  const from = optDate(req.body.from, 'Desde');
+  const to = optDate(req.body.to, 'Hasta');
+  if (!from || !to) throw bad('Elige la fecha de inicio y de fin del semestre');
+  if (to < from) throw bad('La fecha de fin debe ser después de la de inicio');
+  if ((new Date(to) - new Date(from)) / 86400000 > 400) throw bad('El período no puede ser mayor a un año');
+
+  const { items, errors } = parseSchedule(req.body.text);
+  if (!items.length) throw bad(errors[0] ? `Línea ${errors[0].line}: ${errors[0].reason}` : 'Pega al menos una línea del horario');
+
+  // Se asocia cada clase a su materia (por código o nombre) para que tome su color.
+  const subjects = await all('SELECT id, name, code FROM subjects');
+  const findSubject = (it) =>
+    (it.code && subjects.find((s) => s.code && fold(s.code).replace(/[\s-]/g, '') === fold(it.code).replace(/[\s-]/g, ''))) ||
+    (it.name && subjects.find((s) => fold(s.name) === fold(it.name))) ||
+    null;
+
+  const deletes = req.body.replace === false || req.body.replace === '0'
+    ? []
+    : [...new Set(items.map((it) => it.title))].map((title) => [
+        "DELETE FROM events WHERE type = 'clase' AND date >= ? AND date <= ? AND title = ?",
+        from,
+        to,
+        title,
+      ]);
+
+  const inserts = [];
+  const summary = items.map((it) => {
+    const subject = findSubject(it);
+    const dates = datesFor(it.weekday, from, to);
+    for (const date of dates) {
+      inserts.push([
+        "INSERT INTO events (subject_id, title, type, date, start_time, end_time) VALUES (?, ?, 'clase', ?, ?, ?)",
+        subject ? subject.id : null,
+        it.title,
+        date,
+        it.start,
+        it.end,
+      ]);
+    }
+    return { day: it.day, start: it.start, end: it.end, title: it.title, sessions: dates.length, subject: subject ? subject.name : null };
+  });
+  if (inserts.length > 2000) throw bad('Son demasiadas clases de una vez; usa un período más corto');
+
+  const results = await batch([...deletes, ...inserts]);
+  const deleted = results.slice(0, deletes.length).reduce((sum, r) => sum + (r.changes || 0), 0);
+  res.status(201).json({ created: inserts.length, deleted, items: summary, errors });
+});
+
+/** Quita todas las sesiones de clase de un período. */
+router.delete('/events/classes', async (req, res) => {
+  const from = optDate(req.query.from, 'Desde');
+  const to = optDate(req.query.to, 'Hasta');
+  if (!from || !to) throw bad('Elige la fecha de inicio y de fin');
+  const info = await run("DELETE FROM events WHERE type = 'clase' AND date >= ? AND date <= ?", from, to);
+  res.json({ deleted: info.changes });
 });
 
 router.put('/events/:id', async (req, res) => {

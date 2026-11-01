@@ -63,9 +63,9 @@ function listSubjects(semesterId, t) {
     `SELECT s.*, sem.name AS semester_name,
             (SELECT COUNT(*) FROM materials m WHERE m.subject_id = s.id) AS material_count,
             (SELECT COUNT(*) FROM classes c WHERE c.subject_id = s.id) AS class_count,
-            (SELECT e.date FROM events e WHERE e.subject_id = s.id AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_date,
-            (SELECT e.title FROM events e WHERE e.subject_id = s.id AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_title,
-            (SELECT e.type FROM events e WHERE e.subject_id = s.id AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_type
+            (SELECT e.date FROM events e WHERE e.subject_id = s.id AND e.type <> 'clase' AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_date,
+            (SELECT e.title FROM events e WHERE e.subject_id = s.id AND e.type <> 'clase' AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_title,
+            (SELECT e.type FROM events e WHERE e.subject_id = s.id AND e.type <> 'clase' AND e.date >= ?1 ORDER BY e.date, e.start_time LIMIT 1) AS next_event_type
        FROM subjects s
        JOIN semesters sem ON sem.id = s.semester_id
       WHERE (?2 IS NULL OR s.semester_id = ?2)
@@ -90,15 +90,17 @@ async function subjectDetail(subjectId) {
       subjectId
     ),
     all(`${MATERIAL_SELECT} WHERE m.subject_id = ? ORDER BY m.created_at DESC, m.id DESC`, subjectId).then(fileLinks.addFileUrls),
-    all(`${EVENT_SELECT} WHERE e.subject_id = ? ORDER BY e.date, e.start_time`, subjectId),
+    all(`${EVENT_SELECT} WHERE e.subject_id = ? AND e.type <> 'clase' ORDER BY e.date, e.start_time`, subjectId),
   ]);
   if (!subject) return null;
   return Object.assign(subject, { classes, materials, events });
 }
 
-function listEvents({ from, to, semesterId, subjectId, limit }) {
+/** evaluationsOnly: sin las sesiones de clase (para "Próximas evaluaciones" y contadores). */
+function listEvents({ from, to, semesterId, subjectId, limit, evaluationsOnly }) {
   const where = [];
   const params = [];
+  if (evaluationsOnly) where.push("e.type <> 'clase'");
   if (from) {
     where.push('e.date >= ?');
     params.push(from);
@@ -191,14 +193,14 @@ router.get('/dashboard', async (req, res) => {
   const semParams = semesterId ? [semesterId] : [];
 
   const [upcoming, recentMaterials, subjects, semester, materialCount, upcoming30] = await Promise.all([
-    listEvents({ from: t, semesterId, limit: 8 }),
+    listEvents({ from: t, semesterId, limit: 8, evaluationsOnly: true }),
     listMaterials({ semesterId, limit: 6 }),
     listSubjects(semesterId, t),
     semesterId ? get('SELECT * FROM semesters WHERE id = ?', semesterId) : null,
     get(`SELECT COUNT(*) AS n FROM materials m JOIN subjects s ON s.id = m.subject_id ${semFilter}`, ...semParams),
     get(
       `SELECT COUNT(*) AS n FROM events e LEFT JOIN subjects s ON s.id = e.subject_id
-        WHERE e.date >= ? AND e.date <= ? ${semesterId ? 'AND (s.semester_id = ? OR e.subject_id IS NULL)' : ''}`,
+        WHERE e.type <> 'clase' AND e.date >= ? AND e.date <= ? ${semesterId ? 'AND (s.semester_id = ? OR e.subject_id IS NULL)' : ''}`,
       t,
       to30,
       ...semParams

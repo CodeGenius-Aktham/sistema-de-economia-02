@@ -285,6 +285,52 @@ test('el estudiante no puede usar el panel admin', async () => {
   assert.equal((await student('GET', '/admin')).status, 302);
 });
 
+test('horario de clases: crea las sesiones semanales sin mezclarlas con evaluaciones', async () => {
+  const horario = [
+    'Lunes 07:20-10:20 CB1103 Introducción a la Matemática',
+    'Lunes 10:25-12:40 CB1101 Historia Contemporánea',
+    'jueves 10:25 - 13:25 Introducción a la Economía (CB1102)',
+    'Vie 7:20 a 10:20 CB1104 Métodos de Investigación I',
+    'esto no es una clase',
+  ].join('\n');
+  const mat = await admin('POST', '/api/admin/subjects', { semester_id: ids.semester, name: 'Introducción a la Matemática', code: 'CB1103' });
+  assert.equal((await student('POST', '/api/admin/events/schedule', { text: horario, from: '2026-11-02', to: '2026-11-30' })).status, 403);
+
+  const r = await admin('POST', '/api/admin/events/schedule', { text: horario, from: '2026-11-02', to: '2026-11-30', replace: true });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  // Noviembre 2026: 5 lunes (×2 clases) + 4 jueves + 4 viernes = 18
+  assert.equal(r.data.created, 18);
+  assert.equal(r.data.errors.length, 1);
+  assert.deepEqual(r.data.items.map((i) => [i.day, i.start, i.end, i.title, i.sessions]), [
+    ['Lunes', '07:20', '10:20', 'Introducción a la Matemática (CB1103)', 5],
+    ['Lunes', '10:25', '12:40', 'Historia Contemporánea (CB1101)', 5],
+    ['Jueves', '10:25', '13:25', 'Introducción a la Economía (CB1102)', 4],
+    ['Viernes', '07:20', '10:20', 'Métodos de Investigación I (CB1104)', 4],
+  ]);
+  assert.equal(r.data.items[0].subject, 'Introducción a la Matemática', 'se asocia a la materia por su código');
+
+  // Volver a cargar reemplaza en vez de duplicar
+  const again = await admin('POST', '/api/admin/events/schedule', { text: horario, from: '2026-11-02', to: '2026-11-30' });
+  assert.equal(again.data.deleted, 18);
+  const nov = (await student('GET', '/api/events?from=2026-11-01&to=2026-11-30')).data.filter((e) => e.type === 'clase');
+  assert.equal(nov.length, 18);
+  assert.equal(nov[0].date, '2026-11-02');
+  assert.equal(nov[0].subject_id, mat.data.id);
+
+  // No aparecen como evaluaciones
+  const dash = await student('GET', '/api/dashboard?today=2026-11-01');
+  assert.ok(dash.data.upcoming.every((e) => e.type !== 'clase'));
+  const subs = await student('GET', `/api/subjects?semester_id=${ids.semester}&today=2026-11-01`);
+  assert.equal(subs.data.find((s) => s.code === 'CB1103').next_event_date, null);
+
+  const bad = await admin('POST', '/api/admin/events/schedule', { text: horario, from: '2026-11-30', to: '2026-11-01' });
+  assert.equal(bad.status, 400);
+
+  const del = await admin('DELETE', '/api/admin/events/classes?from=2026-11-01&to=2026-11-30');
+  assert.equal(del.data.deleted, 18);
+  await admin('DELETE', `/api/admin/subjects/${mat.data.id}`);
+});
+
 test('importación masiva de estudiantes', async () => {
   const text = ['cedula, correo, nombre', '23456789, jose@correo.com, José Gómez', 'Ana Ruiz;ana.ruiz@correo.com;E-34567890', 'sin datos validos', '12345678, maria.nueva@correo.com'].join('\n');
   const r = await admin('POST', '/api/admin/students/import', { text, semester_id: ids.semester });

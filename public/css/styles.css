@@ -2333,6 +2333,23 @@ a.stat:hover {
   min-width: 0;
 }
 
+.cal-pill.is-class {
+  background: color-mix(in srgb, var(--c) 7%, transparent);
+  border-left-style: dotted;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.cal-toggle {
+  color: var(--text-3);
+}
+
+.cal-toggle.on {
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+  border-color: transparent;
+}
+
 .cal-pill span {
   overflow: hidden;
   text-overflow: ellipsis;

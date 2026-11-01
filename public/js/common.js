@@ -198,6 +198,7 @@ const EVENT_TYPES = {
   entrega: { label: 'Entrega', icon: 'upload', color: '#0ea5e9' },
   exposicion: { label: 'Exposición', icon: 'presentation', color: '#8b5cf6' },
   otro: { label: 'Actividad', icon: 'star', color: '#64748b' },
+  clase: { label: 'Clase', icon: 'book', color: '#64748b' },
 };
 
 const SUBJECT_COLORS = ['#6366f1', '#8b5cf6', '#d946ef', '#ec4899', '#f43f5e', '#f97316', '#f59e0b', '#10b981', '#14b8a6', '#06b6d4', '#3b82f6', '#64748b'];
@@ -554,7 +555,7 @@ function formModal({ title, fields, values = {}, submitLabel = 'Guardar', onSubm
   if (onDelete) {
     form.querySelector('[data-delete]').onclick = async () => {
       try {
-        const done = await onDelete();
+        const done = await onDelete(readFields(form, fields));
         if (done !== false) m.close();
       } catch (ex) {
         toast(ex.message, 'error');
@@ -588,7 +589,7 @@ function eventItem(e, { showSubject = true } = {}) {
       <strong>${esc(e.title)}</strong>
       <div class="meta">
         <span class="badge" style="--c:${t.color}">${icon(t.icon)}${t.label}</span>
-        ${showSubject && e.subject_name ? `<span>${icon('book')}${esc(e.subject_name)}</span>` : ''}
+        ${showSubject && e.subject_name && e.type !== 'clase' ? `<span>${icon('book')}${esc(e.subject_name)}</span>` : ''}
         ${time ? `<span>${icon('clock')}${esc(time)}</span>` : ''}
         ${e.location ? `<span>${icon('pin')}${esc(e.location)}</span>` : ''}
       </div>
@@ -684,6 +685,11 @@ class CalendarView {
     this.month = t.getMonth();
     this.selected = todayISO();
     this.mode = sessionStorage.getItem('cal-mode') || 'month';
+    try {
+      this.showClasses = localStorage.getItem('cal-classes') !== '0';
+    } catch {
+      this.showClasses = true;
+    }
     this.events = [];
     this.root.addEventListener('click', (e) => this.onClick(e));
   }
@@ -714,8 +720,16 @@ class CalendarView {
     }
   }
 
+  /** Eventos visibles: las clases se pueden ocultar para ver solo evaluaciones. */
+  visible() {
+    return this.showClasses ? this.events : this.events.filter((e) => e.type !== 'clase');
+  }
+
   eventsOn(iso) {
-    return this.events.filter((e) => e.date === iso);
+    // Primero las evaluaciones, luego las clases; dentro de cada grupo, por hora.
+    return this.visible()
+      .filter((e) => e.date === iso)
+      .sort((a, b) => (a.type === 'clase') - (b.type === 'clase') || String(a.start_time || '').localeCompare(String(b.start_time || '')));
   }
 
   header() {
@@ -727,6 +741,11 @@ class CalendarView {
              <h3>${cap(MONTHS[this.month])} ${this.year}</h3>
              <button class="btn btn-ghost btn-sm" data-cal="today">Hoy</button>`
           : `<h3>Próximas fechas</h3>`
+      }
+      ${
+        this.events.some((e) => e.type === 'clase')
+          ? `<button class="btn btn-ghost btn-sm cal-toggle ${this.showClasses ? 'on' : ''}" data-cal="classes" aria-pressed="${this.showClasses}" title="Mostrar u ocultar las clases">${icon(this.showClasses ? 'eye' : 'eye-off')}Clases</button>`
+          : ''
       }
       <div class="tabs" style="padding:3px">
         <button class="tab ${this.mode === 'month' ? 'active' : ''}" data-cal="month" style="height:32px" aria-label="Vista mensual">${icon('grid')}</button>
@@ -754,7 +773,7 @@ class CalendarView {
       ].join(' ');
       const pills = evs
         .slice(0, 3)
-        .map((e) => `<span class="cal-pill" style="--c:${eventColor(e)}" data-event-id="${e.id}" title="${esc(e.title)}"><span>${esc(e.title)}</span></span>`)
+        .map((e) => `<span class="cal-pill ${e.type === 'clase' ? 'is-class' : ''}" style="--c:${eventColor(e)}" data-event-id="${e.id}" title="${esc(e.title)}"><span>${esc(e.title)}</span></span>`)
         .join('');
       const more = evs.length > 3 ? `<span class="cal-more">+${evs.length - 3} más</span>` : '';
       const dots = evs.length ? `<span class="cal-dots">${evs.slice(0, 4).map((e) => `<i style="--c:${eventColor(e)}"></i>`).join('')}</span>` : '';
@@ -762,7 +781,7 @@ class CalendarView {
     }
 
     const subjects = new Map();
-    for (const e of this.events) if (e.subject_name) subjects.set(e.subject_name, e.subject_color);
+    for (const e of this.visible()) if (e.subject_name) subjects.set(e.subject_name, e.subject_color);
     const legend = [...subjects]
       .slice(0, 10)
       .map(([n, c]) => `<span><i style="--c:${c || '#64748b'}"></i>${esc(n)}</span>`)
@@ -792,7 +811,7 @@ class CalendarView {
 
   renderList() {
     const groups = new Map();
-    for (const e of this.events) {
+    for (const e of this.visible()) {
       const d = parseISO(e.date);
       const key = `${cap(MONTHS[d.getMonth()])} ${d.getFullYear()}`;
       if (!groups.has(key)) groups.set(key, []);
@@ -831,6 +850,14 @@ class CalendarView {
         this.month = t.getMonth();
         this.selected = todayISO();
         this.reload();
+      } else if (a === 'classes') {
+        this.showClasses = !this.showClasses;
+        try {
+          localStorage.setItem('cal-classes', this.showClasses ? '1' : '0');
+        } catch {
+          /* sin almacenamiento */
+        }
+        this.render();
       } else if (a === 'month' || a === 'list') {
         if (this.mode === a) return;
         this.mode = a;

@@ -213,6 +213,64 @@ async function deleteEvent(ev) {
   return true;
 }
 
+/** Carga el horario semanal y crea una sesión "Clase" por cada día del período. */
+function scheduleForm() {
+  const fields = [
+    {
+      name: 'text',
+      label: 'Horario (una línea por clase)',
+      type: 'textarea',
+      rows: 6,
+      required: true,
+      full: true,
+      placeholder: 'Lunes 07:20-10:20 CB1103 Introducción a la Matemática\nJueves 10:25-13:25 CB1102 Introducción a la Economía',
+      hint: 'Formato: <b>Día HH:MM-HH:MM CÓDIGO Nombre</b>. Si la materia ya existe en el portal con ese código, la clase toma su color.',
+    },
+    { name: 'from', label: 'Primer día de clases', type: 'date', required: true },
+    { name: 'to', label: 'Último día de clases', type: 'date', required: true },
+    { name: 'replace', type: 'toggle', toggleLabel: 'Reemplazar estas mismas clases si ya las habías cargado en esas fechas', full: true },
+  ];
+  formModal({
+    title: 'Cargar horario de clases',
+    size: 'lg',
+    intro: `<div class="alert info">${icon('info')}<span>Se crea una clase en el calendario por cada semana del período. Las clases no aparecen en "Próximas evaluaciones" y los estudiantes pueden ocultarlas con el botón <b>Clases</b> del calendario.</span></div>`,
+    fields,
+    values: { from: todayISO(), replace: true },
+    submitLabel: 'Agregar al calendario',
+    deleteLabel: 'Quitar clases del período',
+    onSubmit: async (v) => {
+      const r = await api('/admin/events/schedule', { method: 'POST', body: v });
+      toast(`${r.created} clases agregadas${r.deleted ? ` (${r.deleted} reemplazadas)` : ''}`);
+      Router.refresh();
+      if (r.errors.length) {
+        openModal({
+          title: `${r.errors.length} línea(s) no se pudieron leer`,
+          body: `<div class="list">${r.errors
+            .map((e) => `<div class="admin-row"><span class="badge neutral">Línea ${e.line}</span><div class="info"><strong>${esc(e.text)}</strong><span>${esc(e.reason)}</span></div></div>`)
+            .join('')}</div>`,
+          footer: `<button class="btn btn-primary" data-close>Entendido</button>`,
+        });
+      }
+    },
+    onDelete: async (v) => {
+      if (!v.from || !v.to) {
+        toast('Elige primero el período (primer y último día)', 'error');
+        return false;
+      }
+      const ok = await confirmDialog({
+        title: 'Quitar clases',
+        message: `Se quitarán del calendario todas las clases entre el <strong>${esc(fmtDate(v.from, 'medium'))}</strong> y el <strong>${esc(fmtDate(v.to, 'medium'))}</strong>. Las evaluaciones no se tocan.`,
+        confirmLabel: 'Quitar clases',
+      });
+      if (!ok) return false;
+      const r = await api('/admin/events/classes', { method: 'DELETE', query: { from: v.from, to: v.to } });
+      toast(`${r.deleted} clases quitadas`);
+      Router.refresh();
+      return true;
+    },
+  });
+}
+
 function openEvent(ev) {
   showEventDetail(ev, { onEdit: (e) => eventForm(e), onDelete: (e) => deleteEvent(e) });
 }
@@ -878,6 +936,7 @@ async function pageCalendarAdmin(ctx) {
         <button class="chip ${current === 'all' ? 'active' : ''}" data-sem="all">${icon('layers')}Todos</button>
         ${A.semesters.map((s) => `<button class="chip ${current === String(s.id) ? 'active' : ''}" data-sem="${s.id}">${esc(s.name)}</button>`).join('')}
       </div>
+      <button class="btn btn-ghost" data-schedule>${icon('clock')} Cargar horario de clases</button>
       <button class="btn btn-primary" data-new>${icon('calendar-plus')} Programar evaluación</button>
     </section>
     <section data-calendar></section>
@@ -898,6 +957,7 @@ async function pageCalendarAdmin(ctx) {
       return cal.reload();
     }
     if (e.target.closest('[data-new]')) return eventForm(null, { date: cal.selected });
+    if (e.target.closest('[data-schedule]')) return scheduleForm();
     const ad = e.target.closest('[data-add-date]');
     if (ad) eventForm(null, { date: ad.dataset.addDate });
   });
