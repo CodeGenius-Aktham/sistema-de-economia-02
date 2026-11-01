@@ -355,14 +355,29 @@ function uploadModal({ subjectId, classId } = {}) {
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
-  const storageMode = A.settings.storage || 'local';
-  const maxMb = Number(A.settings.max_upload_mb) || 50;
-  if (storageMode === 'missing') {
+  let storageMode = A.settings.storage || 'local';
+  let maxMb = Number(A.settings.max_upload_mb) || 50;
+  const applyStorage = () => {
+    form.querySelector('[data-blob-warn]')?.remove();
+    if (storageMode !== 'missing') return;
     form.querySelector('[data-file-zone]').insertAdjacentHTML(
       'afterbegin',
-      `<div class="alert warn">${icon('alert')}<span>Para guardar archivos en Vercel falta conectar <strong>Vercel Blob</strong> (Storage → Blob, acceso privado). Mientras tanto puedes agregar enlaces.</span></div>`
+      `<div class="alert warn" data-blob-warn>${icon('alert')}<span>Para guardar archivos en Vercel falta conectar <strong>Vercel Blob</strong> (Storage → Blob, acceso privado). Si ya lo conectaste, recarga la página con Ctrl + Shift + R. Mientras tanto puedes agregar enlaces.</span></div>`
     );
-  }
+  };
+  /** Pregunta de nuevo al servidor: la página pudo abrirse antes de conectar Blob. */
+  const refreshStorage = async () => {
+    try {
+      A.settings = await api('/admin/settings');
+      storageMode = A.settings.storage || 'local';
+      maxMb = Number(A.settings.max_upload_mb) || 50;
+    } catch {
+      /* se conserva lo que ya sabíamos */
+    }
+    applyStorage();
+  };
+  applyStorage();
+  refreshStorage();
 
   const showError = (msg) => {
     err.innerHTML = `${icon('alert')}<span>${esc(msg)}</span>`;
@@ -405,7 +420,8 @@ function uploadModal({ subjectId, classId } = {}) {
     const url = form.querySelector('[name=url]').value.trim();
     if (kind === 'file') {
       if (!files.length) return showError('Selecciona al menos un archivo');
-      if (storageMode === 'missing') return showError('Falta conectar Vercel Blob para guardar archivos.');
+      if (storageMode === 'missing') await refreshStorage();
+      if (storageMode === 'missing') return showError('Falta conectar Vercel Blob para guardar archivos. Si ya lo conectaste, recarga la página (Ctrl + Shift + R).');
       const big = files.find((f) => f.size > maxMb * 1024 * 1024);
       if (big) return showError(`"${big.name}" supera el máximo de ${maxMb} MB`);
     } else if (!url) {
@@ -579,10 +595,9 @@ async function pageOverview(ctx) {
   const pending = steps.filter((s) => !s[1]).length;
   const name = firstName(A.auth.user.name) || A.auth.user.username;
 
-  const sys = A.settings.system;
   ctx.render(`
     ${
-      sys && !sys.archivos_ok
+      st.storage === 'missing'
         ? `<div class="alert warn">${icon('alert')}<span>Falta conectar <strong>Vercel Blob</strong> para poder subir archivos. <a href="#/ajustes"><strong>Ver estado del sistema</strong></a></span></div>`
         : ''
     }
