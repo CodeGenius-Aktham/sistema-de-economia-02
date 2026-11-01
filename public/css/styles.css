@@ -1014,6 +1014,12 @@ svg.i {
   flex: none;
 }
 
+.brand-logo svg.i {
+  width: 62%;
+  height: 62%;
+  stroke-width: 2.7;
+}
+
 .brand-text {
   display: flex;
   flex-direction: column;

@@ -10,7 +10,7 @@
     });
   }
 
-  document.querySelectorAll('[data-brand-logo]').forEach((el) => (el.innerHTML = icon('trend')));
+  document.querySelectorAll('[data-brand-logo]').forEach((el) => (el.innerHTML = icon('logo')));
   hydrateIcons();
   bindThemeToggles();
   $('#year').textContent = new Date().getFullYear();

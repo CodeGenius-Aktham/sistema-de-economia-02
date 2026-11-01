@@ -1,3 +1,5 @@
+<p align="center"><img src="public/img/logo.svg" width="88" alt="Logo de Economía 02"></p>
+
 # Economía 02 · Portal académico
 
 Portal web para la universidad donde los estudiantes entran con su **cédula y correo** y encuentran:
@@ -26,6 +28,14 @@ Funciona en **teléfono y computadora** (diseño adaptable, menú inferior en el
 | Login (móvil, modo oscuro) | Calendario (móvil) | Detalle de evaluación |
 | --- | --- | --- |
 | ![Login](docs/capturas/movil-login.jpg) | ![Calendario móvil](docs/capturas/movil-calendario.jpg) | ![Evaluación](docs/capturas/movil-evaluacion.jpg) |
+
+---
+
+## Logo
+
+![Concepto del logo](docs/logo/concepto.png)
+
+Una línea de mercado que sube, corrige y alcanza su punto máximo. La pequeña caída ocupa el lugar de la barra horizontal de una **A** escondida: no se ve la letra, pero quien la busca la encuentra. Archivos en `public/img/`: `logo.svg` (con fondo), `logo-mark.svg` (solo el trazo), `favicon.svg` y los íconos para celular (`apple-touch-icon.png`, `icon-192.png`, `icon-512.png`).
 
 ---
 

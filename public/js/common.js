@@ -64,6 +64,8 @@ const ICONS = {
   hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
   award: '<circle cx="12" cy="8" r="6"/><path d="M15.48 12.89 17 22l-5-3-5 3 1.52-9.11"/>',
   trend: '<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
+  // Logo: línea de mercado que sube hasta su máximo; la caída marca la barra de una "A" escondida.
+  logo: '<path d="M3.6 21 L7.4 13.4 L10.2 15.6 L12.4 3.6 L20.4 21"/>',
   more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>',
@@ -880,7 +882,7 @@ const Shell = {
     Shell.siteName = settings.site_name;
     document.querySelectorAll('[data-site-name]').forEach((el) => (el.textContent = settings.site_name));
     document.querySelectorAll('[data-site-tagline]').forEach((el) => (el.textContent = settings.site_tagline || settings.university || ''));
-    document.querySelectorAll('[data-brand-logo]').forEach((el) => (el.innerHTML = icon('trend')));
+    document.querySelectorAll('[data-brand-logo]').forEach((el) => (el.innerHTML = icon('logo')));
 
     const side = document.getElementById('side-nav');
     side.innerHTML = nav
