@@ -579,7 +579,13 @@ async function pageOverview(ctx) {
   const pending = steps.filter((s) => !s[1]).length;
   const name = firstName(A.auth.user.name) || A.auth.user.username;
 
+  const sys = A.settings.system;
   ctx.render(`
+    ${
+      sys && !sys.archivos_ok
+        ? `<div class="alert warn">${icon('alert')}<span>Falta conectar <strong>Vercel Blob</strong> para poder subir archivos. <a href="#/ajustes"><strong>Ver estado del sistema</strong></a></span></div>`
+        : ''
+    }
     ${
       st.must_change_password
         ? `<div class="alert warn">${icon('alert')}<span>Estás usando la contraseña inicial del administrador. <a href="#/ajustes"><strong>Cámbiala ahora</strong></a> para proteger el portal.</span></div>`
@@ -1000,6 +1006,30 @@ async function pageStudents(ctx) {
   draw();
 }
 
+/** Tarjeta "Estado del sistema": base de datos y almacenamiento de archivos. */
+function systemCard(sys) {
+  if (!sys) return '';
+  const row = (ok, ic, title, value, help) => `
+    <div class="admin-row" style="align-items:flex-start">
+      <span class="t-ico" style="display:grid;place-items:center;width:38px;height:38px;border-radius:12px;flex:none;color:${ok ? 'var(--success)' : 'var(--warning)'};background:color-mix(in srgb, ${ok ? 'var(--success)' : 'var(--warning)'} 14%, transparent)">${icon(ic)}</span>
+      <div class="info" style="white-space:normal">
+        <strong>${esc(title)}</strong>
+        <span style="white-space:normal">${esc(value)}</span>
+        ${help ? `<p class="small muted" style="margin-top:6px">${help}</p>` : ''}
+      </div>
+      <span class="status-dot" style="--c:${ok ? 'var(--success)' : 'var(--warning)'}">${ok ? 'Conectado' : 'Pendiente'}</span>
+    </div>`;
+  const filesHelp = sys.archivos_ok
+    ? ''
+    : 'En Vercel: <b>Storage → Create → Blob</b> (acceso <b>Private</b>), conéctalo al proyecto y luego <b>Deployments → ⋯ → Redeploy</b>.';
+  const dbHelp = sys.base_de_datos_ok ? '' : 'Revisa las variables <b>TURSO_DATABASE_URL</b> y <b>TURSO_AUTH_TOKEN</b> en Vercel y vuelve a desplegar.';
+  return `<section class="card card-pad stack-sm">
+    <div class="row"><h3 style="font-size:18px;flex:1">Estado del sistema</h3><button class="btn btn-ghost btn-sm" data-recheck>${icon('refresh')} Revisar de nuevo</button></div>
+    ${row(sys.base_de_datos_ok, 'layers', 'Base de datos', sys.base_de_datos, dbHelp)}
+    ${row(sys.archivos_ok, 'folder', 'Archivos (materiales)', sys.archivos, filesHelp)}
+  </section>`;
+}
+
 async function pageSettings(ctx) {
   Shell.setTitle('Ajustes', 'Portal y cuenta de administrador');
   const s = await api('/admin/settings');
@@ -1027,6 +1057,7 @@ async function pageSettings(ctx) {
   ];
 
   ctx.render(`
+    ${systemCard(s.system)}
     <section class="grid-2" style="align-items:start">
       <form class="card card-pad stack" data-site novalidate>
         <div><h3 style="font-size:18px">Portal</h3><p class="muted small">Así se ve el portal para los estudiantes.</p></div>
@@ -1062,6 +1093,11 @@ async function pageSettings(ctx) {
       }
     });
   };
+
+  document.querySelector('[data-recheck]')?.addEventListener('click', () => {
+    toast('Revisando…');
+    Router.refresh();
+  });
 
   wire(document.querySelector('[data-site]'), siteFields, async (v) => {
     const saved = await api('/admin/settings', { method: 'PUT', body: v });

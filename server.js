@@ -16,6 +16,7 @@ const db = require('./src/db');
 const storage = require('./src/storage');
 const auth = require('./src/auth');
 const { HttpError } = require('./src/util');
+const { systemStatus } = require('./src/status');
 const authRoutes = require('./src/routes/auth');
 const portalRoutes = require('./src/routes/portal');
 const adminRoutes = require('./src/routes/admin');
@@ -78,6 +79,13 @@ function setupErrorPage(message) {
 <div class="alert warn"><span>${message.replace(/[<>&]/g, '')}</span></div>
 <p class="muted small">Revisa la guía de despliegue en el README del proyecto.</p></div></div></body></html>`;
 }
+
+/* ---------- estado del sistema (público, sin secretos) ---------- */
+
+app.get('/api/health', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await systemStatus());
+});
 
 /* ---------- base de datos lista antes de atender ---------- */
 

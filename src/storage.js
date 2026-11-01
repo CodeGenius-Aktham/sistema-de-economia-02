@@ -152,8 +152,18 @@ function validBlobUpload(f) {
   );
 }
 
+/** Estado de la conexión de archivos (sin revelar secretos). */
+function status() {
+  return {
+    mode: MODE,
+    blob_token: !!BLOB_TOKEN,
+    blob_store_id: !!env('BLOB_STORE_ID'),
+  };
+}
+
 module.exports = {
   MODE,
+  status,
   MAX_UPLOAD_MB,
   sendFile,
   removeFiles,

@@ -67,6 +67,14 @@ test('sin sesión no se puede ver el contenido', async () => {
   assert.equal((await anon('GET', '/')).status, 200);
 });
 
+test('estado del sistema en modo local', async () => {
+  const h = await client()('GET', '/api/health');
+  assert.equal(h.status, 200);
+  assert.equal(h.data.ok, true);
+  assert.equal(h.data.base_de_datos, 'archivo local');
+  assert.equal(h.data.archivos, 'disco local');
+});
+
 test('login de administrador', async () => {
   const bad = await admin('POST', '/api/auth/login/admin', { username: 'admin', password: 'incorrecta' });
   assert.equal(bad.status, 401);

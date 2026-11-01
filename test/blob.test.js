@@ -50,11 +50,18 @@ function client() {
 const admin = client();
 const ids = {};
 
+test('estado del sistema: Blob conectado', async () => {
+  const h = await client()('GET', '/api/health');
+  assert.equal(h.data.archivos, 'vercel blob conectado');
+  assert.equal(h.data.archivos_ok, true);
+});
+
 test('configuración en modo blob', async () => {
   assert.equal((await admin('POST', '/api/auth/login/admin', { username: 'admin', password: 'clave-segura-123' })).status, 200);
   const s = await admin('GET', '/api/admin/settings');
   assert.equal(s.data.storage, 'blob');
   assert.equal(s.data.max_upload_mb, 100);
+  assert.equal(s.data.system.archivos_ok, true);
   ids.sem = (await admin('POST', '/api/admin/semesters', { name: 'Semestre I' })).data.id;
   ids.sub = (await admin('POST', '/api/admin/subjects', { semester_id: ids.sem, name: 'Microeconomía' })).data.id;
 });

@@ -29,6 +29,7 @@ const {
   today,
 } = require('../util');
 const { subjectDetail, listEvents, listMaterials, MATERIAL_SELECT } = require('./portal');
+const { systemStatus } = require('../status');
 
 const router = express.Router();
 router.use(auth.requireAdmin);
@@ -616,6 +617,7 @@ router.post('/students/import', async (req, res) => {
 router.get('/settings', async (req, res) => {
   res.json({
     ...(await getSettings()),
+    system: await systemStatus(),
     admin: { username: req.auth.user.username, name: req.auth.user.name },
     storage: storage.MODE,
     max_upload_mb: MAX_UPLOAD_MB,
