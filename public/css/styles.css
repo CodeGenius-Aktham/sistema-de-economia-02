@@ -2731,6 +2731,21 @@ a.stat:hover {
   }
 }
 
+/* Los formularios envuelven cabecera, cuerpo y pie: el <form> también debe ser una
+   columna flexible para que el cuerpo se desplace y los botones queden siempre a la vista. */
+.modal > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.modal-head,
+.modal-foot,
+.event-detail-top {
+  flex: none;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -2745,8 +2760,12 @@ a.stat:hover {
 }
 
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 22px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 16px;
